@@ -1,5 +1,5 @@
 package edu.berkeley.cs186.database.concurrency;
-
+// If you see this line, you have successfully pulled the latest changes from the skeleton for proj4!
 import edu.berkeley.cs186.database.TransactionContext;
 import edu.berkeley.cs186.database.common.Pair;
 
@@ -57,6 +57,7 @@ public class LockManager {
         // Queue for yet-to-be-satisfied lock requests on this resource.
         Deque<LockRequest> waitingQueue = new ArrayDeque<>();
 
+<<<<<<< HEAD
         /**
          * Get lock type of active lock.
          * @return LockType
@@ -166,6 +167,62 @@ public class LockManager {
                 waitingTransaction.unblock();
                 waitingQueue.remove();
             }
+=======
+        // Below are a list of helper methods you should implement!
+        // Make sure to use these helper methods to abstract your code and
+        // avoid re-implementing every time!
+
+        /**
+         * Check if a LOCKTYPE lock is compatible with preexisting locks.
+         * Allows conflicts for locks held by transaction id EXCEPT.
+         */
+        boolean checkCompatible(LockType lockType, long except) {
+            // TODO(proj4_part1): implement
+            return false;
+        }
+
+        /**
+         * Gives the transaction the lock LOCK. Assumes that the lock is compatible.
+         * Updates lock on resource if the transaction already has a lock.
+         */
+        void grantOrUpdateLock(Lock lock) {
+            // TODO(proj4_part1): implement
+            return;
+        }
+
+        /**
+         * Releases the lock LOCK and processes the queue. Assumes it had been granted before.
+         */
+        void releaseLock(Lock lock) {
+            // TODO(proj4_part1): implement
+            return;
+        }
+
+        /**
+         * Adds a request for LOCK by the transaction to the queue and puts the transaction
+         * in a blocked state.
+         */
+        void addToQueue(LockRequest request, boolean addFront) {
+            // TODO(proj4_part1): implement
+            return;
+        }
+
+        /**
+         * Grant locks to requests from front to back of the queue, stopping
+         * when the next lock cannot be granted.
+         */
+        private void processQueue() {
+            // TODO(proj4_part1): implement
+            return;
+        }
+
+        /**
+         * Gets the type of lock TRANSACTION has on this resource.
+         */
+        LockType getTransactionLockType(long transaction) {
+            // TODO(proj4_part1): implement
+            return LockType.NL;
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
         }
 
         @Override
@@ -295,9 +352,13 @@ public class LockManager {
         // you will have to write some code outside the synchronized block to avoid locking up
         // the entire lock manager when a transaction is blocked. You are also allowed to
         // move the synchronized block elsewhere if you wish.
+<<<<<<< HEAD
 
         boolean compatible = false; //boolean indicator on whether transaction lock is compatible with current lock(s),
                                     // determines whether transaction blocked or not.
+=======
+        boolean shouldBlock = false;
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
         synchronized (this) {
             LockType lt = getLockType(transaction, name);
             //CASE 1: We try to A+R a lock on a resource that isn't meant to be released.
@@ -352,8 +413,12 @@ public class LockManager {
         // you will have to write some code outside the synchronized block to avoid locking up
         // the entire lock manager when a transaction is blocked. You are also allowed to
         // move the synchronized block elsewhere if you wish.
+<<<<<<< HEAD
         boolean compatible = false;
         LockType lt = getLockType(transaction, name);
+=======
+        boolean shouldBlock = false;
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
         synchronized (this) {
             if (lt != LockType.NL) {
                 throw new DuplicateLockRequestException("Lock Already Held By Transaction on Resource");
@@ -428,8 +493,14 @@ public class LockManager {
     public void promote(TransactionContext transaction, ResourceName name,
                         LockType newLockType)
     throws DuplicateLockRequestException, NoLockHeldException, InvalidLockException {
+<<<<<<< HEAD
         LockType lt = getLockType(transaction, name);
         boolean compatible = false;
+=======
+        // TODO(proj4_part1): implement
+        // You may modify any part of this method.
+        boolean shouldBlock = false;
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
         synchronized (this) {
             if (lt == newLockType) {
                 throw new DuplicateLockRequestException("Lock Already Held On Resource By transaction.");

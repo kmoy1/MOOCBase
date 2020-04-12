@@ -204,7 +204,11 @@ public class Page {
          */
         @Override
         public Buffer get(byte[] dst, int offset, int length) {
+<<<<<<< HEAD
             LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
+=======
+            // TODO(proj4_part3): locking code here
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
             Page.this.readBytes(this.offset + offset, length, dst);
             return this;
         }
@@ -219,7 +223,11 @@ public class Page {
          */
         @Override
         public Buffer put(byte[] src, int offset, int length) {
+<<<<<<< HEAD
             LockUtil.ensureSufficientLockHeld(lockContext, LockType.X);
+=======
+            // TODO(proj4_part3): locking code here
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
             Page.this.writeBytes(this.offset + offset, length, src);
             return this;
         }

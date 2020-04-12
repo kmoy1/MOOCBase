@@ -1,4 +1,8 @@
 package edu.berkeley.cs186.database.concurrency;
+<<<<<<< HEAD
+=======
+// If you see this line, you have successfully pulled the latest changes from the skeleton for proj4!
+>>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
 import edu.berkeley.cs186.database.TransactionContext;
 
 import java.util.*;
