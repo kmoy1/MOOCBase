@@ -18,9 +18,18 @@ public enum LockType {
         if (a == null || b == null) {
             throw new NullPointerException("null lock type");
         }
-        // TODO(proj4_part1): implement
-
-        return false;
+        //If B = no lock, trivially compatible
+        if (b == NL) {
+            return true;
+        }
+        switch (a) {
+            case S: return b == S || b == IS;
+            case X: return false; //Since we already checked for B == NL, no other locks worth with exclusive.
+            case IS: return b != X;
+            case IX: return b == IS || b == IX;
+            case SIX: return b == IS;
+            default: return true;
+        }
     }
 
     /**
@@ -31,14 +40,18 @@ public enum LockType {
         if (a == null) {
             throw new NullPointerException("null lock type");
         }
+        //Least permissive = single level above (only IS or IX)
         switch (a) {
-        case S: return IS;
-        case X: return IX;
-        case IS: return IS;
-        case IX: return IX;
-        case SIX: return IX;
-        case NL: return NL;
-        default: throw new UnsupportedOperationException("bad lock type");
+            //Parents of shared -> intention shared.
+            case S:
+            case IS:
+                return IS;
+            //Parents of exclusive = (shared) + intention exclusive
+            case X:
+            case SIX:
+            case IX:
+                return IX;
+            default: return NL; //Honestly, should never call parentLock on NL.
         }
     }
 
@@ -50,9 +63,8 @@ public enum LockType {
         if (parentLockType == null || childLockType == null) {
             throw new NullPointerException("null lock type");
         }
-        // TODO(proj4_part1): implement
-
-        return false;
+        //
+        return substitutable(parentLockType, parentLock(childLockType));
     }
 
     /**
@@ -65,9 +77,17 @@ public enum LockType {
         if (required == null || substitute == null) {
             throw new NullPointerException("null lock type");
         }
-        // TODO(proj4_part1): implement
-
-        return false;
+        //True if substitute lock power >= required lock power.
+        switch (required) {
+            case S: return substitute == S ||
+                    substitute == X || substitute == SIX;
+            case X: return substitute == X;
+            case IS: return substitute != NL;
+            case IX: return substitute == X ||
+                    substitute == IX || substitute == SIX;
+            case SIX: return substitute == X || substitute == SIX;
+            default: return true; //NL
+        }
     }
 
     @Override

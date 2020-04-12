@@ -59,6 +59,8 @@ class BNLJOperator extends JoinOperator {
         private BacktrackingIterator<Record> rightRecordIterator = null;
         // The current record on the left page
         private Record leftRecord = null;
+        // The current record on the right page [ADDED]
+        private Record rightRecord = null;
         // The next record to return
         private Record nextRecord = null;
 
@@ -73,9 +75,9 @@ class BNLJOperator extends JoinOperator {
             fetchNextRightPage();
 
             try {
-                this.fetchNextRecord();
+                fetchNextRecord();
             } catch (NoSuchElementException e) {
-                this.nextRecord = null;
+                nextRecord = null;
             }
         }
 
@@ -88,19 +90,47 @@ class BNLJOperator extends JoinOperator {
          * and leftRecord should be set to null.
          */
         private void fetchNextLeftBlock() {
-            // TODO(proj3_part1): implement
+            if (!leftIterator.hasNext()) { //No more pages in the left relation with records.
+                this.leftRecordIterator = null;
+                this.leftRecord = null;
+                return;
+            }
+            int blocksize = numBuffers - 2;
+            //return iterator over B-2 pages in left table
+            this.leftRecordIterator = getBlockIterator(getLeftTableName(), leftIterator, blocksize);
+            this.leftRecord = leftRecordIterator.next();
+            leftRecordIterator.markPrev();
         }
 
         /**
          * Fetch the next non-empty page from the right relation. rightRecordIterator
          * should be set to a record iterator over the next page of the right relation that
-         * has a record in it.
+         * has a record in it. Also sets right record to first record on right page, and MARKS record iterator.
          *
-         * If there are no more pages in the left relation with records, rightRecordIterator
+         * If there are no more pages in the right relation with records, rightRecordIterator
          * should be set to null.
          */
         private void fetchNextRightPage() {
-            // TODO(proj3_part1): implement
+            this.rightRecordIterator = getBlockIterator(getRightTableName(), rightIterator, 1);
+            if (rightRecordIterator.hasNext()) {
+                this.rightRecord = rightRecordIterator.next();
+                rightRecordIterator.markPrev();
+            } else {
+                this.rightRecord = null;
+            }
+        }
+
+        /**
+         * Reset left page iterator to previously marked spot, and updates left record if it can.
+         */
+        private void resetLeft() {
+            leftRecordIterator.reset();
+            if (leftRecordIterator.hasNext()) {
+                leftRecord = leftRecordIterator.next();
+            } else {
+                leftRecord = null;
+            }
+            leftRecordIterator.markPrev();
         }
 
         /**
@@ -110,7 +140,78 @@ class BNLJOperator extends JoinOperator {
          * @throws NoSuchElementException if there are no more Records to yield
          */
         private void fetchNextRecord() {
-            // TODO(proj3_part1): implement
+            //GAME PLAN: Iterate through both relations until match, then set iterators to correct place.
+            if (leftRecord == null) throw new NoSuchElementException();
+            nextRecord = null; //Reset nextRecord container space.
+            while (!hasNext()) {
+                boolean nextLRec = leftRecordIterator.hasNext(); //has next Left table record
+                boolean nextRRec = rightRecordIterator.hasNext(); //has next right table record
+                boolean nextLBlock = leftIterator.hasNext(); //has next Left table BLOCK (B-2 pages)
+                boolean nextRPage = rightIterator.hasNext(); //has next right table PAGE
+                //CASE 1: Both relations in middle of page(s), records left to check.
+                if (rightRecord != null) {
+                    matchUp(); //Try to find match.
+                }
+                //CASE 2: no more records or pages in either (searched every possible).
+                //I.e. no more records to return
+                else if (!nextLRec && !nextRRec && !nextRPage && !nextLBlock) {
+                    throw new NoSuchElementException();
+                }
+                //CASE 3: New page on the right to check through.
+                else if (!nextLRec && !nextRRec && nextRPage) {
+                    resetLeft();
+                    fetchNextRightPage();
+                }
+                //CASE 4: End of left page (another page), Iterated through all possible right records.
+                else if (!nextLRec && !nextRRec && !nextRPage && nextLBlock) {
+                    fetchNextLeftBlock();
+                    //RESET right iterator to beginning of RIGHT table.
+                    rightIterator = getPageIterator(getRightTableName());
+                    fetchNextRightPage();
+                }
+                //CASE 5: In middle of left page and end of right records.
+                else {
+                    leftRecord = leftRecordIterator.next();
+                    rightRecordIterator.reset();
+                    rightRecord = rightRecordIterator.next();
+                    rightRecordIterator.markPrev();
+                }
+            }
+        }
+
+        /** Search through both relations for a match, assuming records left.**/
+        private void matchUp() {
+            DataBox ri = leftRecord.getValues().get(getLeftColumnIndex());
+            DataBox sj = rightRecord.getValues().get(getRightColumnIndex());
+            if (match(ri, sj)) {
+                yieldMatch(); //Yield record match
+            }
+            if (rightRecordIterator.hasNext()) {
+                rightRecord = rightRecordIterator.next();
+            } else {
+                rightRecord = null;
+            }
+        }
+
+        /**
+         * Helper function that yields the combined record < ri, sj >,
+         * which we know through state attributes leftRecord and rightRecord.
+         */
+        private void yieldMatch() {
+            List<DataBox> ri_rec = new ArrayList<>(leftRecord.getValues());
+            List<DataBox> sj_rec = new ArrayList<>(rightRecord.getValues());
+            ri_rec.addAll(sj_rec);
+            this.nextRecord = new Record(ri_rec); //YIELD <ri, sj> record.
+        }
+
+        /**
+         * Helper function to check for column value matches.
+         * @param ri Left relation val
+         * @param sj Right relation val
+         * @return if match
+         */
+        private boolean match(DataBox ri, DataBox sj) {
+            return ri.equals(sj);
         }
 
         /**

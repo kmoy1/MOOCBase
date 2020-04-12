@@ -7,6 +7,8 @@ import edu.berkeley.cs186.database.common.iterator.BacktrackingIterator;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.table.Record;
 
+import javax.xml.crypto.Data;
+
 class SortMergeOperator extends JoinOperator {
     SortMergeOperator(QueryOperator leftSource,
                       QueryOperator rightSource,
@@ -44,22 +46,77 @@ class SortMergeOperator extends JoinOperator {
      */
     private class SortMergeIterator extends JoinIterator {
         /**
-        * Some member variables are provided for guidance, but there are many possible solutions.
-        * You should implement the solution that's best for you, using any member variables you need.
-        * You're free to use these member variables, but you're not obligated to.
-        */
+         * Some member variables are provided for guidance, but there are many possible solutions.
+         * You should implement the solution that's best for you, using any member variables you need.
+         * You're free to use these member variables, but you're not obligated to.
+         */
+        private String ltName; //Left table name
+        private String rtName; //right table name
         private BacktrackingIterator<Record> leftIterator;
         private BacktrackingIterator<Record> rightIterator;
+        private SortOperator sl; //sorting on left table
+        private SortOperator sr; //sorting on right table
         private Record leftRecord;
         private Record nextRecord;
         private Record rightRecord;
         private boolean marked;
+        private LeftRecordComparator LRComp = new LeftRecordComparator();
+        private RightRecordComparator RRComp = new RightRecordComparator();
 
         private SortMergeIterator() {
             super();
-            // TODO(proj3_part1): implement
+            this.ltName = getLeftTableName(); //unsorted
+            this.rtName = getRightTableName();
+            SortOperator sleft = new SortOperator(getTransaction(), ltName, new LeftRecordComparator());
+            this.leftIterator = getTransaction().getRecordIterator(sleft.sort()); // iterates over sorted left table.
+            SortOperator sright = new SortOperator(getTransaction(), rtName, new RightRecordComparator());
+            this.rightIterator = getTransaction().getRecordIterator(sright.sort()); //iterates over sorted right table.
+            this.nextRecord = null;
+            advanceLeft();//Get next left row
+            advanceRight(); //Get next right row
+            marked = false;
+            rightIterator.markPrev();
+            //SAME as BNLJ
+            try {
+                fetchNextRecord();
+            } catch (NoSuchElementException e) {
+                nextRecord = null;
+            }
         }
 
+        /**
+         * Advance left iterator, and update left record
+         */
+        private void advanceLeft() {
+            if (leftIterator.hasNext()) {
+                leftRecord = leftIterator.next();
+            } else {
+                leftRecord = null;
+            }
+        }
+
+        /**
+         * Advance right iterator, and update right record
+         */
+        private void advanceRight() {
+            if (rightIterator.hasNext()) {
+                rightRecord = rightIterator.next();
+            } else {
+                rightRecord = null;
+            }
+        }
+
+        /**
+         * Reset right iterator to previously marked spot and set rightrecord.
+         */
+        private void resetRight() {
+            rightIterator.reset();
+            if (rightIterator.hasNext()) {
+                rightRecord = rightIterator.next();
+            } else{
+                rightRecord = null;
+            }
+        }
         /**
          * Checks if there are more record(s) to yield
          *
@@ -67,9 +124,8 @@ class SortMergeOperator extends JoinOperator {
          */
         @Override
         public boolean hasNext() {
-            // TODO(proj3_part1): implement
-
-            return false;
+//            fetchNextRecord();
+            return nextRecord != null;
         }
 
         /**
@@ -80,9 +136,16 @@ class SortMergeOperator extends JoinOperator {
          */
         @Override
         public Record next() {
-            // TODO(proj3_part1): implement
-
-            throw new NoSuchElementException();
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
+            Record record = this.nextRecord;
+            try {
+                fetchNextRecord(); //Update nextRecord at the same time.
+            } catch (NoSuchElementException e) { //No records left
+                this.nextRecord = null;
+            }
+            return record;
         }
 
         @Override
@@ -90,11 +153,73 @@ class SortMergeOperator extends JoinOperator {
             throw new UnsupportedOperationException();
         }
 
+        /**
+         * Fetches the next record to return, and sets nextRecord to it. If there are no more
+         * records to return, a NoSuchElementException should be thrown.
+         *
+         * @throws NoSuchElementException if there are no more Records to yield
+         */
+        private void fetchNextRecord() {
+            if (leftRecord == null) throw new NoSuchElementException();
+            nextRecord = null; //Clear space for next record.
+            do {
+                //CASE 1: NOT marked and right table not at end (of page)
+                if (!marked && rightRecord != null) {
+                    findMatch();//Advances both tables iteratively based on comparison flag value, until match.
+                    rightIterator.markPrev();
+                    marked = true; //marked a matched row.
+                }
+                //MATCHED (follows from findMatch()
+                if (rightRecord != null && LRComp.compare(leftRecord,rightRecord) == 0) {
+                    yieldMatch();
+                    advanceRight();
+                } else { //No match. Advance to next row in left iterator, and reset right.
+                    resetRight();
+                    advanceLeft();
+                    if (leftRecord == null) {
+                        return;
+                    }
+                    marked = false;
+                }
+            } while (!hasNext());
+        }
+
+        /**
+         * Helper function that will iteratively call advance our left and
+         * right iterators until a match is found:
+         * when compare(leftrecord, rightrecord) = 0.
+         */
+        private void findMatch() {
+            while (LRComp.compare(leftRecord, rightRecord) < 0) {
+                advanceLeft();
+                if (leftRecord == null) {
+                    return;
+                }
+            }
+            while (LRComp.compare(leftRecord, rightRecord) > 0) {
+                advanceRight();
+            }
+        }
+
+        /**
+         * Helper function that yields the combined record < ri, sj >,
+         * which we know through state attributes leftRecord and rightRecord,
+         * and assigns it to nextrecord.
+         */
+        private void yieldMatch() {
+            List<DataBox> ri_rec = new ArrayList<>(leftRecord.getValues());
+            List<DataBox> sj_rec = new ArrayList<>(rightRecord.getValues());
+            ri_rec.addAll(sj_rec);
+            this.nextRecord = new Record(ri_rec); //YIELD <ri, sj> record.
+        }
+
+
+
         private class LeftRecordComparator implements Comparator<Record> {
             @Override
             public int compare(Record o1, Record o2) {
                 return o1.getValues().get(SortMergeOperator.this.getLeftColumnIndex()).compareTo(
-                           o2.getValues().get(SortMergeOperator.this.getLeftColumnIndex()));
+                        o2.getValues().get(SortMergeOperator.this.getLeftColumnIndex()));
             }
         }
 
@@ -102,7 +227,7 @@ class SortMergeOperator extends JoinOperator {
             @Override
             public int compare(Record o1, Record o2) {
                 return o1.getValues().get(SortMergeOperator.this.getRightColumnIndex()).compareTo(
-                           o2.getValues().get(SortMergeOperator.this.getRightColumnIndex()));
+                        o2.getValues().get(SortMergeOperator.this.getRightColumnIndex()));
             }
         }
     }

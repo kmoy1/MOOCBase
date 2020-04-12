@@ -1,6 +1,7 @@
 package edu.berkeley.cs186.database.index;
 
 import java.nio.ByteBuffer;
+import java.sql.Array;
 import java.util.*;
 
 import edu.berkeley.cs186.database.common.Buffer;
@@ -11,6 +12,9 @@ import edu.berkeley.cs186.database.databox.Type;
 import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.table.RecordId;
+
+import javax.swing.text.html.Option;
+import javax.xml.crypto.Data;
 
 /**
  * A leaf of a B+ tree. Every leaf in a B+ tree of order d stores between d and
@@ -139,25 +143,60 @@ class LeafNode extends BPlusNode {
     // Core API //////////////////////////////////////////////////////////////////
     // See BPlusNode.get.
     @Override
+    /**
+     * Base Case for Inner Node get calls.
+     */
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
+
+    /**
+     * Base Case for Inner Node get Calls.
+     */
     @Override
     public LeafNode getLeftmostLeaf() {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        boolean duplicateKey = keys.contains(key);
+        if (duplicateKey) throw new BPlusTreeException("Duplicate Key");
+        int i = InnerNode.numLessThanEqual(key,keys); //In a leaf node, number of keys < key = index to place.
+        int d = metadata.getOrder();
+        keys.add(i, key);
+        rids.add(i, rid);
 
+        //CASE 1: Overflow (more than 2d entries).
+        // Split node -> left + right. Return (split_key, right_node_page_num)
+        if (keys.size() > d * 2) {
+            int split_index = (int) Math.floor(keys.size()/2);
+            //First, acquire keys for both halves.
+            List<DataBox> rightKeys = keys.subList(split_index, keys.size());
+            List<DataBox> leftKeys = keys.subList(0,split_index);
+            //Next, Record IDs.
+            List<RecordId> rightRids = rids.subList(split_index, rids.size());
+            List<RecordId> leftRids = rids.subList(0,split_index);
+            //Then, create a NEW (right) leaf node, and treat the current leaf node as the new LEFT.
+            LeafNode right = new LeafNode(metadata,bufferManager,rightKeys,rightRids,rightSibling,treeContext); //Create right node
+            keys = leftKeys;
+            rids = leftRids;
+            //Finally, to update the parent node, we must propagate the first element of the right node (SPLIT KEY) to parent.
+            DataBox splitKey = right.keys.get(0); //Split key = new right key
+            long rightNodePageNum = right.getPage().getPageNum();
+            //Finally, as we are now a left sibling, we connect ourselves to the newly created right leaf.
+            this.rightSibling = Optional.of(rightNodePageNum); //Attach left split leaf -> right, so we save the right.
+            //Return and update.
+            Pair p = new Pair<>(splitKey, rightNodePageNum);
+            this.sync();
+            return Optional.of(p);
+        }
+
+        //CASE 2: No overflow.
+        this.sync();
         return Optional.empty();
     }
 
@@ -165,16 +204,51 @@ class LeafNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
-
-        return Optional.empty();
+        int d = metadata.getOrder();
+        int nodeLim = (int) Math.ceil(2*d*fillFactor); //limit of keys fillable in non-parent node, rounded up
+        //Fill leaf node with up to NODELIM (keys, rids)
+        while (data.hasNext() && keys.size() <= nodeLim) {
+            Pair<DataBox, RecordId> kr = data.next();
+            DataBox k = kr.getFirst();
+            RecordId r = kr.getSecond();
+            boolean duplicateKey = keys.contains(k);
+            if (duplicateKey) throw new BPlusTreeException("Duplicate Key");
+            int i = InnerNode.numLessThanEqual(k,keys);
+            keys.add(i, k);
+            rids.add(i, r);
+        }
+        //If node has more than our NODELIM allows, SPLIT.
+        if (keys.size() > nodeLim) {
+            DataBox rightKey = keys.remove(keys.size()-1); //remove LAST key of current and place in split right node
+            RecordId rightRID = rids.remove(rids.size()-1);
+            List<DataBox> rightKeys = new ArrayList<>();
+            List<RecordId> rightRIDs = new ArrayList<>();
+            rightKeys.add(rightKey);
+            rightRIDs.add(rightRID);
+            LeafNode right = new LeafNode(metadata,bufferManager,rightKeys,rightRIDs,rightSibling,treeContext); //Create right node
+            DataBox splitKey = right.keys.get(0); //Split key = new right key
+            long rightNodePageNum = right.getPage().getPageNum();
+            this.rightSibling = Optional.of(rightNodePageNum); //Attach left split leaf -> right
+            Pair kp = new Pair<>(splitKey, rightNodePageNum); //(split key, right node page number)
+            Optional<Pair<DataBox, Long>> keyPage = Optional.empty();
+            this.sync(); //God f*cking damn it not putting this @$#&$#^ line of code cost me TWO HOURS OF DEBUGGING TIME
+            return keyPage.of(kp);
+        }
+        else { //We ran out of pairs to insert before needing a split.
+            this.sync();
+            return Optional.empty();
+        }
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
-
+        if (keys.contains(key)) {
+            int removalIndex = keys.indexOf(key);
+            keys.remove(removalIndex);
+            rids.remove(removalIndex);
+        }
+        sync();
         return;
     }
 
@@ -359,12 +433,34 @@ class LeafNode extends BPlusNode {
 
     /**
      * Loads a leaf node from page `pageNum`.
+     * @param metadata metadata
+     * @param bufferManager buffer manager (connect to disk)
+     * @param treeContext lock context object
+     * @param pageNum page number for leaf node to point to
+     * @return: Leaf Node that persists to specified page number.
      */
     public static LeafNode fromBytes(BPlusTreeMetadata metadata, BufferManager bufferManager,
                                      LockContext treeContext, long pageNum) {
-        // TODO(proj2): implement
+        Page p = bufferManager.fetchPage(treeContext, pageNum, false);
+        Buffer b = p.getBuffer(); //serialized container
+        if (b.get() != (byte) 1){
+            throw new BPlusTreeException("Should be leaf Node!");
+        }
+        long siblingID = b.getLong(); //next EIGHT bytes of buffer is sibling
+//        Optional<LeafNode> rs = getRightSibling();
+        Optional<Long> rightSiblingID = Optional.empty();
+        if (siblingID != -1) {
+            rightSiblingID = Optional.of(siblingID);
+        }
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+        int numPairs = b.getInt(); //number of (key, rid) pairs
+        for (int i = 0; i < numPairs; i++) {
+            keys.add(DataBox.fromBytes(b, metadata.getKeySchema()));
+            rids.add(RecordId.fromBytes(b));
+        }
 
-        return null;
+        return new LeafNode(metadata,bufferManager,p,keys,rids,rightSiblingID,treeContext);//attach leaf to page pageNum
     }
 
     // Builtins //////////////////////////////////////////////////////////////////

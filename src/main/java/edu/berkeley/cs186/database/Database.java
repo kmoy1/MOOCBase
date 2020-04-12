@@ -1054,7 +1054,9 @@ public class Database implements AutoCloseable {
 
         @Override
         public void close() {
-            // TODO(proj4_part2): release locks held by the transaction
+            deleteAllTempTables();
+            //Acquire locks to be released.
+            List<Lock> releaseLocks = lockManager.getLocks(this);
             return;
         }
 

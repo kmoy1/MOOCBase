@@ -147,8 +147,7 @@ of the main README and browse through examples in
 written in our database.
 
 After `execute()` has been called on a QueryPlan object, you can print the final query plan:
-```java
-Iterator<Record> result = query.execute();
+```javaIterator<Record> result = query.execute();
 QueryOperator finalOperator = query.getFinalOperator();
 System.out.println(finalOperator.toString());
 ```

@@ -5,10 +5,11 @@ import edu.berkeley.cs186.database.DatabaseException;
 import edu.berkeley.cs186.database.common.iterator.BacktrackingIterator;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.table.Record;
+import edu.berkeley.cs186.database.table.RecordIterator;
 import edu.berkeley.cs186.database.table.Schema;
 import edu.berkeley.cs186.database.common.Pair;
-import edu.berkeley.cs186.database.memory.Page;
 
+import java.lang.reflect.Array;
 import java.util.*;
 
 public class SortOperator {
@@ -71,9 +72,26 @@ public class SortOperator {
      * size of the buffer, but it is done this way for ease.
      */
     public Run sortRun(Run run) {
-        // TODO(proj3_part1): implement
+        Iterator<Record> iter = run.iterator();
+        ArrayList<Record> sortedRecords = runThrough(iter);
+        Run sorted = createRun();
+        sorted.addRecords(sortedRecords);
+        return sorted;
+    }
 
-        return null;
+    /**
+     * Helper method that takes an iterator over a run and returns a sorted records arraylist,
+     * using state attribute comparator to sort.
+     * @param iter iterator over Run
+     * @return sorted arraylist of records
+     */
+    private ArrayList<Record> runThrough(Iterator<Record> iter) {
+        ArrayList<Record> r = new ArrayList<>();
+        while (iter.hasNext()) {
+            r.add(iter.next());
+        }
+        r.sort(comparator);
+        return r;
     }
 
     /**
@@ -85,9 +103,53 @@ public class SortOperator {
      * sorting on currently unmerged from run i.
      */
     public Run mergeSortedRuns(List<Run> runs) {
-        // TODO(proj3_part1): implement
+        Run merged = createRun(); //FINAL RETURN RUN (SORTED)
+        List<Iterator> iters = getRunIterators(runs); //LIST of iterators over all merging pieces.
+        PriorityQueue<Pair<Record, Integer>> pq = queueUp(runs); //priority queue, filled
+        while (!pq.isEmpty()) {
+            Pair<Record, Integer> p = pq.poll(); //get first run record
+            List<DataBox> recordVals = p.getFirst().getValues();
+            merged.addRecord(recordVals); //add record values (single record) to merged run.
+            Iterator<Record> iter2 = iters.get(p.getSecond()); //iterator on next run.
+            if (iter2.hasNext()) {//Go through run and add its (r,i) pairs to the priority queue and repeat merge process.
+                Record r = iter2.next();
+                Pair<Record, Integer> p2 = new Pair(r, p.getSecond());
+                pq.add(p2); //Add.
+            }
+        }
+        return merged;
+    }
 
-        return null;
+    /**
+     * Helper function to return all iterators over all runs.
+     * @param runs runs list
+     * @return list of iterators each corresponding to a run in runs
+     */
+    private List<Iterator> getRunIterators(List<Run> runs) {
+        ArrayList<Iterator> its = new ArrayList<>();
+        int num_runs = runs.size();
+        for (int i = 0; i < num_runs; i ++) {
+            Iterator<Record> iter = runs.get(i).iterator();//iterator for run i in runs
+            Record nextRec = iter.next();
+            Pair<Record, Integer> pair = new Pair(nextRec, i);
+            its.add(iter);
+        }
+        return its;
+    }
+
+    /**
+     * Helper function to fill up priority queue with min records from each run.
+     * @param runs runs list
+     * @return filled priority queue
+     */
+    private PriorityQueue<Pair<Record, Integer>> queueUp(List<Run> runs) {
+        PriorityQueue<Pair<Record, Integer>> pq = new PriorityQueue(runs.size(), new RecordPairComparator());
+        for (int i = 0; i < runs.size(); i ++) {
+            Record r = runs.get(i).iterator().next();
+            Pair<Record, Integer> p = new Pair(r, i); //r = smallest record from run i.
+            pq.add(p);
+        }
+        return pq;
     }
 
     /**
@@ -98,9 +160,14 @@ public class SortOperator {
      * perfect multiple.
      */
     public List<Run> mergePass(List<Run> runs) {
-        // TODO(proj3_part1): implement
-
-        return Collections.emptyList();
+        ArrayList<Run> mergedSortedRuns = new ArrayList<>();
+        int N = runs.size();
+        int Bm1 = numBuffers - 1; //B - 1
+        for(int i = 0; i < N; i += Bm1) {
+            List<Run> sortedRunsList = runs.subList(i, i + Bm1); //sorted runs of B pages.
+            mergedSortedRuns.add(mergeSortedRuns(sortedRunsList)); //Add run to full. If multiple, recursively handled in sort() method below.
+        }
+        return mergedSortedRuns;
     }
 
     /**
@@ -109,9 +176,22 @@ public class SortOperator {
      * Returns the name of the table that backs the final run.
      */
     public String sort() {
-        // TODO(proj3_part1): implement
-
-        return this.tableName; // TODO(proj3_part1): replace this!
+        BacktrackingIterator iter_pages = this.transaction.getPageIterator(this.tableName); //iterator over pages in table.
+        int B = numBuffers * transaction.getNumEntriesPerPage(tableName); //total # records (might not need to be used)
+        List<Run> sortedRuns = new ArrayList<>(); //Return this
+        while (iter_pages.hasNext()) {
+            //Necessarily advances page iterator as well (learned from BNLJ debugging for like 10 hours)
+            BacktrackingIterator<Record> iter_record = transaction.getBlockIterator(tableName, iter_pages, numBuffers);
+            Run run = createRunFromIterator(iter_record);
+            sortedRuns.add(sortRun(run));
+        }
+        while (true) { // Pass 1 through n.
+            if (sortedRuns.size() <= 1) {
+                break;
+            }
+            sortedRuns = mergePass(sortedRuns);
+        }
+        return sortedRuns.get(0).tableName();
     }
 
     public Iterator<Record> iterator() {

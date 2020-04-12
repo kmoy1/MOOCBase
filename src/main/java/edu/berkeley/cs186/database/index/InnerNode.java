@@ -12,6 +12,8 @@ import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.table.RecordId;
 
+import javax.xml.crypto.Data;
+
 /**
  * A inner node of a B+ tree. Every inner node in a B+ tree of order d stores
  * between d and 2d keys. An inner node with n keys stores n + 1 "pointers" to
@@ -78,42 +80,143 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
-
-        return null;
+        //First, find key in leaf node.
+        int childIndex = numLessThanEqual(key, keys); //get # keys <= key, which ALSO gives correct child node index to traverse to.
+        BPlusNode child = getChild(childIndex);
+        return child.get(key); //recurses if inner node, OR returns self if leaf node!
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
-        // TODO(proj2): implement
-
-        return null;
+        BPlusNode child = getChild(0); //get leftmost child.
+        return child.getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        //First, find a node one level down to place the key at.
+        int d = metadata.getOrder();
+        int maxkeys = 2 * d;
+        int childIndex = numLessThanEqual(key,keys);
+        BPlusNode child = getChild(childIndex);
+        //Then, simply call put(key,rid) on that node again (until we hit a leaf).
+        // Note since we have recursion we apply node split logic to ALL inner nodes
+        // in our traversal path as well as the leaf.
+        Optional<Pair<DataBox, Long>> leafTest = child.put(key, rid);
+        if (leafTest.isPresent() == false) {//If (leaf/child) == optional.empty, then we didn't need to split anything.
+            return Optional.empty();
+        }
+        else { //The leaf splits. We now account for recursive calls for nodes on the path to reach the leaf.
+            //1. Insert split key into parent and adjust pointers.
+            DataBox splitKey = leafTest.get().getFirst();
+            long rightPage = leafTest.get().getSecond();
+            keys.add(childIndex, splitKey);//Add split key
+            //Add newly created right node (from split) to children. Whatever pointer index we traversed to hit the node,
+            // splitting and adding the split key forces this new (right) node's pointer index += 1.
+            children.add(childIndex+1, rightPage);
 
-        return Optional.empty();
+            //If no more overflow, then we good
+            if (keys.size() <= maxkeys) {
+                this.sync();
+                return Optional.empty(); //No split indicator.
+            }
+            else { //Overflow on an inner node: This inner node now has 2d+1 keys. Split again.
+                // NOTE that we do this for EVERY inner node that overflows during this process;
+                // one stack frame per node.
+                List<DataBox> lk = splitKeys(keys).get(0); //LEFT keys
+                List<DataBox> rk = splitKeys(keys).get(1); //RIGHT keys.
+                List<Long> lc = splitKids(children).get(0); //LEFT children.
+                List<Long> rc = splitKids(children).get(1); //RIGHT children.
+                DataBox innerSplitKey = keys.get(d); //This is right nodes first entry.
+                InnerNode right = new InnerNode(metadata,bufferManager,rk,rc,treeContext); //create right node with correct keys/kids
+                setLeft(lk,lc); //set current inner node to left node and sync.
+                return Optional.of(new Pair<>(innerSplitKey, right.getPage().getPageNum()));
+            }
+        }
+    }
+
+    /**Helper function that, given an OVERFLOWN node's children (not definite),
+     * returns a 2-element list of lists, the first element being the
+     * children to place in the LEFT split and the second = children in RIGHT.
+     * @param fosterhome list of children pointers (as longs) in overflown node.
+     * @return 2-element list of lists; first list = left children ptrs, second list = right children ptrs.**/
+    private List<List<Long>> splitKids(List<Long> fosterhome) {
+        int d = this.metadata.getOrder();
+        ArrayList<List<Long>> leftright = new ArrayList<>();
+        leftright.add(children.subList(0,d+1));
+        leftright.add(children.subList(d + 1, 2*d + 2));
+        return leftright;
+    }
+
+    /**Helper function that, given an OVERFLOWN node's keys (2d+1 keys),
+     * returns a 2-element list of lists, the first element being the
+     * keys to place in the LEFT split and the second = keys in RIGHT.
+     * @param overflownKeys list of keys of an overflown node.
+     * @return 2-element list of lists; first list = left keys, second list = right keys.**/
+    private List<List<DataBox>> splitKeys(List<DataBox> overflownKeys) {
+        int d = this.metadata.getOrder();
+        assert(overflownKeys.size() == 2*d+1);
+        ArrayList<List<DataBox>> leftright = new ArrayList<>();
+        leftright.add(keys.subList(0,d));
+        leftright.add(keys.subList(d + 1, 2*d + 1));
+        return leftright;
+    }
+
+    /**Helper function to set overflown node to the left split node, and sync.
+     * @param lk Databox List of left node keys
+     * @param lc Long List of left node children**/
+    private void setLeft(List<DataBox> lk, List<Long> lc) {
+        keys = lk;
+        children = lc;
+        sync();
     }
 
     // See BPlusNode.bulkLoad.
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
-
-        return Optional.empty();
+        //DO NOT USE FILLFACTOR FOR INNER NODES.
+        int d = metadata.getOrder();
+        int nodeLim = 2*d;
+        Optional<Pair<DataBox, Long>> right;
+        //Fill inner node with up to NODELIM (keys, rids)
+        while (data.hasNext() && keys.size() <= nodeLim) {
+            //Inner nodes should repeatedly try to bulk load
+            // the rightmost child until either the inner node is full
+            // (in which case it should split) or there is no more data.
+            BPlusNode rightKid = getChild(children.size()-1);
+            right = rightKid.bulkLoad(data, fillFactor);
+            if (right.isPresent()) { //A SPLIT occurs in any of the traversed nodes.
+                DataBox sk = right.get().getFirst();//Split key
+                Long rpNum = right.get().getSecond();
+                keys.add(sk);
+                children.add(rpNum);
+            }
+        }
+        //Overflow handling (per inner node)
+        if (keys.size() > nodeLim) {
+            List<DataBox> lk = splitKeys(keys).get(0); //LEFT keys
+            List<DataBox> rk = splitKeys(keys).get(1); //RIGHT keys.
+            List<Long> lc = splitKids(children).get(0); //LEFT children.
+            List<Long> rc = splitKids(children).get(1); //RIGHT children.
+            DataBox innerSplitKey = keys.get(d); //This is right nodes first entry.
+            InnerNode rtNode = new InnerNode(metadata,bufferManager,rk,rc,treeContext); //create right node with correct keys/kids
+            setLeft(lk,lc); //set current inner node to left node and sync.
+            return Optional.of(new Pair<>(innerSplitKey, rtNode.getPage().getPageNum()));
+        }
+        else { //We didn't need to split (ran out of pairs to insert).
+            this.sync();
+            return Optional.empty();
+        }
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
-
+        get(key).remove(key);
         return;
     }
 
