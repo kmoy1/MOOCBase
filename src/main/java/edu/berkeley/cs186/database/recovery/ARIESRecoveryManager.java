@@ -913,11 +913,11 @@ public class ARIESRecoveryManager implements RecoveryManager {
             }
             //If the EC Xact table contains an Xact that doesn't exist in our actual Xact table, add it.
             else {
+                startTransaction(newTransaction.apply(EC_XID));
                 transactionTable.put(EC_XID, new TransactionTableEntry(newTransaction.apply(EC_XID)));
                 TransactionTableEntry newRow = transactionTable.get(EC_XID);
-                newRow.lastLSN = currentRecord.getLSN();
+                newRow.lastLSN = EC_lastLSN;
             }
-
         }
     }
 
