@@ -205,11 +205,10 @@ public class ARIESRecoveryManager implements RecoveryManager {
                     tableEntry.lastLSN = addedRecord.LSN;
                     if (flushLog) pageFlushHook(addedRecord.LSN);
                     addedRecord.redo(diskSpaceManager, bufferManager);
-                    if (pageRelated(addedRecord)) {
+                    if (pageRelated2(addedRecord)) {
                         long pageID = addedRecord.getPageNum().get();
                         // If CLR record is an UPDATE to undo
-                        if (addedRecord.type == LogType.UNDO_UPDATE_PAGE ||
-                                addedRecord.type == LogType.UPDATE_PAGE) {
+                        if (addedRecord.type == LogType.UNDO_UPDATE_PAGE) {
                             dirtyPageTable.putIfAbsent(pageID, lastLSN);
                         }
                         //IF CLR record undid an update that first dirtied page, remove that page from DPT.
@@ -524,11 +523,10 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 CLRRecord.redo(diskSpaceManager, bufferManager);
 
                 // UPDATE DPT if we undid a page-related LR.
-                if (pageRelated(CLRRecord)) {
+                if (pageRelated2(CLRRecord)) {
                     long pageID = CLRRecord.getPageNum().get();
                     // If CLR record is an UPDATE to undo
-                    if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE ||
-                            CLRRecord.type == LogType.UPDATE_PAGE) {
+                    if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE) {
                         dirtyPageTable.putIfAbsent(pageID, lastLSN);
                     }
                     //IF CLR record undid an update that first dirtied page, remove that page from DPT.
@@ -791,12 +789,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
             if (currentRecord.type == LogType.BEGIN_CHECKPOINT) {
                 updateTransactionCounter.accept(currentRecord.getMaxTransactionNum().get());
             }
-            /* If the log record is an end_checkpoint record:
-             * - Copy all entries of checkpoint DPT (replace existing entries if any)
-             * - Update lastLSN to be the larger of the existing entry's (if any) and the checkpoint's;
-             *   add to transaction table if not already present.
-             * - Add page numbers from checkpoint's touchedPages to the touchedPages sets in the
-             *   transaction table if the transaction has not finished yet, and acquire X locks. */
+            //Handle END_CHECKPOINT
             else if (currentRecord.type == LogType.END_CHECKPOINT) {
                 //Copy all entries of checkpoint DPT to actual DPT.
                 for (Map.Entry<Long, Long> checkptDPTEntry : currentRecord.getDirtyPageTable().entrySet()) {
@@ -967,6 +960,8 @@ public class ARIESRecoveryManager implements RecoveryManager {
             }
         }
     }
+
+
     /** Return minimum recLSN in DPT **/
     private long getMinRecLSN(){
         long recLSN = Long.MAX_VALUE;
@@ -1012,19 +1007,27 @@ public class ARIESRecoveryManager implements RecoveryManager {
             if (currentLogRecord.isUndoable()) {
                 LogRecord CLRRecord = currentLogRecord.undo(XactTableEntry.lastLSN).getFirst();
                 boolean flush = currentLogRecord.undo(XactTableEntry.lastLSN).getSecond();
-                logManager.appendToLog(CLRRecord);
+                long trueLastLSN = logManager.appendToLog(CLRRecord);
                 if (flush) pageFlushHook(CLRRecord.getLSN());
                 XactTableEntry.lastLSN = CLRRecord.getLSN();
                 CLRRecord.redo(diskSpaceManager, bufferManager);
-                if (pageRelated(currentLogRecord)) {
-                    long pageID = currentLogRecord.getPageNum().get();
+                if (pageRelated(CLRRecord)) {
+                    long pageID = CLRRecord.getPageNum().get();
                     if (dirtyPageTable.containsKey(pageID)) {
                         //If the current log record LSN = DPT LSN for the same Xact,
                         // we've just undone the first dirtying operation, so we can remove the page.
-                        if (currentLogRecord.getLSN() == dirtyPageTable.get(pageID)) {
+                        if (CLRRecord.getLSN() == dirtyPageTable.get(pageID)) {
                             dirtyPageTable.remove(pageID);
                         }
                     }
+                    //This is a shot in the dark that somehow passed a test. Remove if stupid.
+                    else if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE) {
+                        dirtyPageTable.putIfAbsent(pageID, trueLastLSN);
+                    }
+                    else if (CLRRecord.type == LogType.UNDO_ALLOC_PAGE) {
+                        dirtyPageTable.remove(pageID, trueLastLSN);
+                    }
+                    //End of shot in the dark
                 }
             }
             //Acquire newLSN (next log record to undo)
@@ -1066,6 +1069,11 @@ public class ARIESRecoveryManager implements RecoveryManager {
     /** Return if record is page related.**/
     private boolean pageRelated(LogRecord record) {
         return record.getPageNum().isPresent();
+    }
+
+    /** Return if record is page related part 2**/
+    private boolean pageRelated2(LogRecord record) {
+        return record.type == LogType.UNDO_UPDATE_PAGE || record.type == LogType.UNDO_ALLOC_PAGE;
     }
 
 

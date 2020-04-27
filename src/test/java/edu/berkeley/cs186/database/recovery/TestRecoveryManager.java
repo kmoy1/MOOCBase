@@ -578,7 +578,6 @@ public class TestRecoveryManager {
 
         recoveryManager.startTransaction(transaction1);
         long LSN = recoveryManager.logPageWrite(1L, 10000000001L, (short) 0, before, after);
-        System.out.println(getDirtyPageTable(recoveryManager).get(10000000001L));
         // flush everything - recovery tests should always start
         // with a clean load from disk, and here we want everything sent to disk first.
         // Note: this does not call RecoveryManager#close - it only closes the
@@ -605,7 +604,6 @@ public class TestRecoveryManager {
         TransactionTableEntry entry = transactionTable.get(transaction1.getTransNum());
         assertEquals(Transaction.Status.RECOVERY_ABORTING, entry.transaction.getStatus());
         assertEquals(new HashSet<>(Collections.singletonList(10000000001L)), entry.touchedPages);
-        System.out.println(dirtyPageTable);
         //TODO: For some reason DPT not storing the page 10000000001L.
         assertEquals(LSN, (long) dirtyPageTable.get(10000000001L));
 
@@ -807,7 +805,6 @@ public class TestRecoveryManager {
         logManager.fetchLogRecord(LSNs.get(0)).redo(dsm, bm);
         logManager.fetchLogRecord(LSNs.get(1)).redo(dsm, bm);
         logManager.fetchLogRecord(LSNs.get(2)).redo(dsm, bm);
-        System.out.println(getDirtyPageTable(recoveryManager));
         // flush everything - recovery tests should always start
         // with a clean load from disk, and here we want everything sent to disk first.
         // Note: this does not call RecoveryManager#close - it only closes the
@@ -1358,9 +1355,7 @@ public class TestRecoveryManager {
         // check log
         Iterator<LogRecord> iter = logManager.scanFrom(10000L);
         assertEquals(new EndTransactionLogRecord(2L, LSNs.get(12)), iter.next());
-        System.out.println(logManager.fetchLogRecord((long)554));
         assertEquals(new AbortTransactionLogRecord(4L, 0L), iter.next());
-        System.out.println(logManager.fetchLogRecord((long)554));
         assertEquals(new AbortTransactionLogRecord(5L, LSNs.get(16)), iter.next());
         assertEquals(new EndTransactionLogRecord(6L, LSNs.get(14)), iter.next());
         assertFalse(iter.hasNext());
