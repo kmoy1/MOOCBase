@@ -1162,11 +1162,8 @@ public class Database implements AutoCloseable {
             transactionContext.deleteAllTempTables();
 
             recoveryManager.commit(transNum);
-
-            this.cleanup();
-            /*
             executor.execute(this::cleanup);
-            */
+
         }
 
         @Override

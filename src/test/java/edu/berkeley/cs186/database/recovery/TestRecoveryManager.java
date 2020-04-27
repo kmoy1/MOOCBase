@@ -807,7 +807,7 @@ public class TestRecoveryManager {
         logManager.fetchLogRecord(LSNs.get(0)).redo(dsm, bm);
         logManager.fetchLogRecord(LSNs.get(1)).redo(dsm, bm);
         logManager.fetchLogRecord(LSNs.get(2)).redo(dsm, bm);
-
+        System.out.println(getDirtyPageTable(recoveryManager));
         // flush everything - recovery tests should always start
         // with a clean load from disk, and here we want everything sent to disk first.
         // Note: this does not call RecoveryManager#close - it only closes the
@@ -974,7 +974,6 @@ public class TestRecoveryManager {
         LogRecord updateRecord1 = new AllocPartLogRecord(t1.getTransNum(), 9175727, 0L);
         logManager.appendToLog(updateRecord1);
         updateRecord1.redo(getDiskSpaceManager(recoveryManager), getBufferManager(recoveryManager));
-
         logManager.flushToLSN(19999L); // force next record to be LSN 20000L
         LogRecord updateRecord2 = new AllocPageLogRecord(t1.getTransNum(), 91757270000008529L, 10000L);
         logManager.appendToLog(updateRecord2);
