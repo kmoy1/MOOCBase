@@ -118,7 +118,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
         long newLSN = logManager.appendToLog(commitRecord);
 
         // the log should be flushed
-        logManager.flushToLSN(newLSN);
+        pageFlushHook(newLSN);
 
         // the transaction table and the transaction status should be updated.
         tableEntry.lastLSN = newLSN;
@@ -291,11 +291,11 @@ public class ARIESRecoveryManager implements RecoveryManager {
                     transNum, pageNum, undoLog.LSN,
                     pageOffset, null, after);
 
-        } else {
+        }
+        else {
             updateLog = new UpdatePageLogRecord(
                     transNum, pageNum, transactionTable.get(transNum).lastLSN,
                     pageOffset, before, after);
-
         }
 
         long LSN = logManager.appendToLog(updateLog);
@@ -305,14 +305,8 @@ public class ARIESRecoveryManager implements RecoveryManager {
         tableEntry.lastLSN = LSN;
         tableEntry.touchedPages.add(pageNum);
 
-        // the dirty page table should be updated since we write a page.
-        if (!dirtyPageTable.containsKey(pageNum)){
-//            System.out.println("Adding page " + pageNum);
-            dirtyPageTable.put(pageNum, LSN);
-//            System.out.println(dirtyPageTable);
-        }
+        dirtyPageTable.putIfAbsent(pageNum, LSN);
 
-        //new UndoAllocPageLogRecord(transNum, pageNum, transactionTable.get(transNum).lastLSN,)
         return LSN;
     }
 
@@ -513,7 +507,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 LogRecord CLRRecord = CLR.getFirst();
                 boolean flush = CLR.getSecond();
                 lastLSN = logManager.appendToLog(CLRRecord); //LastLSN updates based on new CLR records inserted.
-                if (flush) logManager.flushToLSN(CLRRecord.LSN);
+                if (flush) pageFlushHook(CLRRecord.LSN);
                 CLRRecord.redo(diskSpaceManager, bufferManager);
 
                 // UPDATE DPT if we undid a page-related LR.
@@ -958,7 +952,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 LogRecord CLRRecord = currentLogRecord.undo(XactTableEntry.lastLSN).getFirst();
                 boolean flush = currentLogRecord.undo(XactTableEntry.lastLSN).getSecond();
                 logManager.appendToLog(CLRRecord);
-                if (flush) logManager.flushToLSN(CLRRecord.getLSN());
+                if (flush) pageFlushHook(CLRRecord.getLSN());
                 XactTableEntry.lastLSN = CLRRecord.getLSN();
                 CLRRecord.redo(diskSpaceManager, bufferManager);
             }
