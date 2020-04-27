@@ -1359,7 +1359,9 @@ public class TestRecoveryManager {
         // check log
         Iterator<LogRecord> iter = logManager.scanFrom(10000L);
         assertEquals(new EndTransactionLogRecord(2L, LSNs.get(12)), iter.next());
+        System.out.println(logManager.fetchLogRecord((long)554));
         assertEquals(new AbortTransactionLogRecord(4L, 0L), iter.next());
+        System.out.println(logManager.fetchLogRecord((long)554));
         assertEquals(new AbortTransactionLogRecord(5L, LSNs.get(16)), iter.next());
         assertEquals(new EndTransactionLogRecord(6L, LSNs.get(14)), iter.next());
         assertFalse(iter.hasNext());

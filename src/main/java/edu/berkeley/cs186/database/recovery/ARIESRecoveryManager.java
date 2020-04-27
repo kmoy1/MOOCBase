@@ -17,6 +17,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+
 /**
  * Implementation of ARIES.
  */
@@ -143,6 +144,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
         // An abort record should be emitted
         TransactionTableEntry tableEntry = transactionTable.get(transNum);
         LogRecord abortRecord = new AbortTransactionLogRecord(transNum, tableEntry.lastLSN);
+        System.out.println("Appending Abort Log Record " + abortRecord);
         logManager.appendToLog(abortRecord);
 
         long newLSN = abortRecord.LSN;
@@ -514,7 +516,8 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 if (pageRelated(CLRRecord)) {
                     long pageID = CLRRecord.getPageNum().get();
                     // If CLR record is an UPDATE to undo
-                    if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE) {
+                    if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE ||
+                            CLRRecord.type == LogType.UPDATE_PAGE) {
                         dirtyPageTable.putIfAbsent(pageID, lastLSN);
                     }
                     //IF CLR record undid an update that first dirtied page, remove that page from DPT.
@@ -799,29 +802,40 @@ public class ARIESRecoveryManager implements RecoveryManager {
             if (currentRecord.type == LogType.BEGIN_CHECKPOINT) {
                 updateTransactionCounter.accept(currentRecord.getMaxTransactionNum().get());
             }
-            else if (currentRecord.type.equals(LogType.END_CHECKPOINT)) {
+            /* If the log record is an end_checkpoint record:
+             * - Copy all entries of checkpoint DPT (replace existing entries if any)
+             * - Update lastLSN to be the larger of the existing entry's (if any) and the checkpoint's;
+             *   add to transaction table if not already present.
+             * - Add page numbers from checkpoint's touchedPages to the touchedPages sets in the
+             *   transaction table if the transaction has not finished yet, and acquire X locks. */
+            else if (currentRecord.type == LogType.END_CHECKPOINT) {
                 //Copy all entries of checkpoint DPT to actual DPT.
                 for (Map.Entry<Long, Long> checkptDPTEntry : currentRecord.getDirtyPageTable().entrySet()) {
                     dirtyPageTable.put(checkptDPTEntry.getKey(), checkptDPTEntry.getValue());
                 }
                 //For each Xact in endcheckpt Xact table, Update lastLSNs in actual Xact table to max(actual LSN, checkptLSN)
                 Set<Map.Entry<Long, Pair<Transaction.Status, Long>>> checkptXactTable = currentRecord.getTransactionTable().entrySet();
-                for (Map.Entry<Long, Pair<Transaction.Status, Long>> checkptXactEntry : checkptXactTable) {
-                    long EC_lastLSN = checkptXactEntry.getValue().getSecond();//end checkpoint lastLSN for this Xact.
-                    long EC_XID = checkptXactEntry.getKey();
+                for (Map.Entry<Long, Pair<Transaction.Status, Long>> checkptXactRow : checkptXactTable) {
+                    Transaction.Status XactStatus = checkptXactRow.getValue().getFirst();
+                    long EC_lastLSN = checkptXactRow.getValue().getSecond();//end checkpoint lastLSN for this Xact.
+                    long EC_XID = checkptXactRow.getKey();
                     //get corresponding Xact row (possibly null) in actual Xact table
                     TransactionTableEntry XactTableEntry = transactionTable.get(EC_XID);
-                    if (transactionTable.containsKey(EC_XID)) {
-                        if (XactTableEntry.lastLSN < EC_lastLSN) {
-                            XactTableEntry.lastLSN = EC_lastLSN;
-                        }
+                    //Set lastLSN to max(current lastLSN, checkpt Xact table lastLSN)
+                    if (XactStatus.equals(Status.ABORTING)) {
+                        XactTableEntry.transaction.setStatus(Status.RECOVERY_ABORTING);
                     }
-                    //If the EC Xact table contains an Xact that doesn't exist, add it.
+                    //Set lastLSN to max(current lastLSN, checkpt Xact table lastLSN)
+                    if (transactionTable.containsKey(EC_XID)) {
+                        XactTableEntry.lastLSN = Math.max(XactTableEntry.lastLSN, EC_lastLSN);
+                    }
+                    //If the EC Xact table contains an Xact that doesn't exist in our actual Xact table, add it.
                     else {
                         transactionTable.put(EC_XID, new TransactionTableEntry(newTransaction.apply(EC_XID)));
                         TransactionTableEntry newRow = transactionTable.get(EC_XID);
                         newRow.lastLSN = currentRecord.getLSN();
                     }
+
                 }
                 //Add checkpoint's touchedPages to our actual Xact table's touched pages, and acquire XLOX
                 Set<Map.Entry<Long, List<Long>>> checkptTouchedPagesTable = currentRecord.getTransactionTouchedPages().entrySet();
@@ -857,13 +871,22 @@ public class ARIESRecoveryManager implements RecoveryManager {
             else if (XactTableEntry.transaction.getStatus() == Transaction.Status.RUNNING) {
                 //Abort running Xacts and log abort records.
                 XactTableEntry.transaction.setStatus(Transaction.Status.RECOVERY_ABORTING);
+                //Log abort record WITH PREVLSN = LSN OF TRANSACTION'S MOST RECENT OPERATION.
                 AbortTransactionLogRecord abortLogRecord = new AbortTransactionLogRecord(XID, XactTableEntry.lastLSN);
                 logManager.appendToLog(abortLogRecord);
                 XactTableEntry.lastLSN = abortLogRecord.getLSN();
             }
+            else { //already in recovery_abort.
+
+            }
         }
 
         return;
+    }
+
+    /** Print out logRecord from log given LSN **/
+    public void lr(long LSN) {
+        System.out.println(logManager.fetchLogRecord(LSN));
     }
 
     /** Return if current log record flushes changes to disk, i.e. we can remove the associated page
