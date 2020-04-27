@@ -814,50 +814,17 @@ public class ARIESRecoveryManager implements RecoveryManager {
                     dirtyPageTable.put(checkptDPTEntry.getKey(), checkptDPTEntry.getValue());
                 }
                 //For each Xact in endcheckpt Xact table, Update lastLSNs in actual Xact table to max(actual LSN, checkptLSN)
-                Set<Map.Entry<Long, Pair<Transaction.Status, Long>>> checkptXactTable = currentRecord.getTransactionTable().entrySet();
-                for (Map.Entry<Long, Pair<Transaction.Status, Long>> checkptXactRow : checkptXactTable) {
-                    Transaction.Status XactStatus = checkptXactRow.getValue().getFirst();
-                    long EC_lastLSN = checkptXactRow.getValue().getSecond();//end checkpoint lastLSN for this Xact.
-                    long EC_XID = checkptXactRow.getKey();
-                    //get corresponding Xact row (possibly null) in actual Xact table
-                    TransactionTableEntry XactTableEntry = transactionTable.get(EC_XID);
-                    //Set lastLSN to max(current lastLSN, checkpt Xact table lastLSN)
-                    if (XactStatus.equals(Status.ABORTING)) {
-                        XactTableEntry.transaction.setStatus(Status.RECOVERY_ABORTING);
-                    }
-                    //Set lastLSN to max(current lastLSN, checkpt Xact table lastLSN)
-                    if (transactionTable.containsKey(EC_XID)) {
-                        XactTableEntry.lastLSN = Math.max(XactTableEntry.lastLSN, EC_lastLSN);
-                    }
-                    //If the EC Xact table contains an Xact that doesn't exist in our actual Xact table, add it.
-                    else {
-                        transactionTable.put(EC_XID, new TransactionTableEntry(newTransaction.apply(EC_XID)));
-                        TransactionTableEntry newRow = transactionTable.get(EC_XID);
-                        newRow.lastLSN = currentRecord.getLSN();
-                    }
-
-                }
+                updateLastLSNs(currentRecord);
                 //Add checkpoint's touchedPages to our actual Xact table's touched pages, and acquire XLOX
-                Set<Map.Entry<Long, List<Long>>> checkptTouchedPagesTable = currentRecord.getTransactionTouchedPages().entrySet();
-                for (Map.Entry<Long, List<Long>> touchedPagesRow : checkptTouchedPagesTable) {
-                    long checkptXID = touchedPagesRow.getKey(); //XID from CHECKPOINT.
-                    List<Long> checkptTouchedPages = touchedPagesRow.getValue();
-                    TransactionTableEntry XactTableEntry = transactionTable.get(checkptXID);
-                    if (XactTableEntry.transaction.getStatus() == Status.COMPLETE) {
-                        continue;
-                    }
-                    //Iterate through checkpoint pages and acquire X locks on those that match.
-                    for (long pageID : checkptTouchedPages) {
-                        Set<Long> touchedPages = XactTableEntry.touchedPages;
-                        if (!touchedPages.contains(pageID)) {
-                            touchedPages.add(pageID);
-                            acquireTransactionLock(XactTableEntry.transaction, getPageLockContext(pageID), LockType.X);
-                        }
-                    }
-                }
+                updateTouchedPagesAndLock(currentRecord);
             }
         }
-        // Clean up + end COMMITTING Xacts, and update RUNNING Xacts -> RECOVERY_ABORTING.
+        cleanUpAnalysis();
+        return;
+    }
+
+    /** Clean up + end COMMITTING Xacts, and update RUNNING Xacts -> RECOVERY_ABORTING. **/
+    private void cleanUpAnalysis() {
         for (Map.Entry<Long, TransactionTableEntry> XactTableRow : transactionTable.entrySet()) {
             long XID = XactTableRow.getKey();
             TransactionTableEntry XactTableEntry = XactTableRow.getValue();
@@ -876,12 +843,58 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 logManager.appendToLog(abortLogRecord);
                 XactTableEntry.lastLSN = abortLogRecord.getLSN();
             }
-            else { //already in recovery_abort.
+        }
+    }
 
+    /**Helper method for END_CHECKPT:
+     * Updates each Xact touchedPages in transactionTable based on checkpoint Xact table touched pages. **/
+    private void updateTouchedPagesAndLock(LogRecord currentRecord) {
+        assert(currentRecord.type == LogType.END_CHECKPOINT);
+        Set<Map.Entry<Long, List<Long>>> checkptTouchedPagesTable = currentRecord.getTransactionTouchedPages().entrySet();
+        for (Map.Entry<Long, List<Long>> touchedPagesRow : checkptTouchedPagesTable) {
+            long checkptXID = touchedPagesRow.getKey(); //XID from CHECKPOINT.
+            List<Long> checkptTouchedPages = touchedPagesRow.getValue();
+            TransactionTableEntry XactTableEntry = transactionTable.get(checkptXID);
+            if (XactTableEntry.transaction.getStatus() == Status.COMPLETE) {
+                continue;
+            }
+            //Iterate through checkpoint pages and acquire X locks on those that match.
+            for (long pageID : checkptTouchedPages) {
+                Set<Long> touchedPages = XactTableEntry.touchedPages;
+                if (!touchedPages.contains(pageID)) {
+                    touchedPages.add(pageID);
+                    acquireTransactionLock(XactTableEntry.transaction, getPageLockContext(pageID), LockType.X);
+                }
             }
         }
+    }
 
-        return;
+    /** Use ONLY when currentRecord = END_CHECKPT.
+     * Sets each Xact lastLSN in transactionTable to max(lastLSN, checkptlastLSN) **/
+    private void updateLastLSNs(LogRecord currentRecord) {
+        assert(currentRecord.type == LogType.END_CHECKPOINT);
+        Set<Map.Entry<Long, Pair<Transaction.Status, Long>>> checkptXactTable = currentRecord.getTransactionTable().entrySet();
+        //Set lastLSN to max(current lastLSN, checkpt Xact table lastLSN)
+        for (Map.Entry<Long, Pair<Transaction.Status, Long>> checkptXactEntry : checkptXactTable) {
+            Transaction.Status XactStatus = checkptXactEntry.getValue().getFirst();
+            long EC_lastLSN = checkptXactEntry.getValue().getSecond();//end checkpoint lastLSN for this Xact.
+            long EC_XID = checkptXactEntry.getKey();
+            //get corresponding Xact row (possibly null) in actual Xact table
+            TransactionTableEntry XactTableEntry = transactionTable.get(EC_XID);
+            if (XactStatus.equals(Status.ABORTING)) {
+                XactTableEntry.transaction.setStatus(Status.RECOVERY_ABORTING);
+            }
+            if (XactTableEntry != null) {
+                XactTableEntry.lastLSN = Math.max(XactTableEntry.lastLSN, EC_lastLSN);
+            }
+            //If the EC Xact table contains an Xact that doesn't exist in our actual Xact table, add it.
+            else {
+                transactionTable.put(EC_XID, new TransactionTableEntry(newTransaction.apply(EC_XID)));
+                TransactionTableEntry newRow = transactionTable.get(EC_XID);
+                newRow.lastLSN = currentRecord.getLSN();
+            }
+
+        }
     }
 
     /** Print out logRecord from log given LSN **/
@@ -908,7 +921,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
      */
     void restartRedo() {
         // TODO(hw5): implement
-        Long minRecLSN = getMinRecLSN();
+        long minRecLSN = getMinRecLSN();
         Iterator<LogRecord> iter = logManager.scanFrom(minRecLSN);
         while (iter.hasNext()) {
             LogRecord currentRecord = iter.next();
@@ -1015,7 +1028,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
 
     // Helpers ///////////////////////////////////////////////////////////////////////////////
     /** Return if record is partition related.**/
-    boolean partitionRelated(LogRecord record) {
+    private boolean partitionRelated(LogRecord record) {
         return record.getPartNum().isPresent();
     }
 
