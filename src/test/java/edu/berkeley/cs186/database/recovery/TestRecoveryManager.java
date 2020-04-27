@@ -578,7 +578,7 @@ public class TestRecoveryManager {
 
         recoveryManager.startTransaction(transaction1);
         long LSN = recoveryManager.logPageWrite(1L, 10000000001L, (short) 0, before, after);
-
+        System.out.println(getDirtyPageTable(recoveryManager).get(10000000001L));
         // flush everything - recovery tests should always start
         // with a clean load from disk, and here we want everything sent to disk first.
         // Note: this does not call RecoveryManager#close - it only closes the
@@ -605,6 +605,8 @@ public class TestRecoveryManager {
         TransactionTableEntry entry = transactionTable.get(transaction1.getTransNum());
         assertEquals(Transaction.Status.RECOVERY_ABORTING, entry.transaction.getStatus());
         assertEquals(new HashSet<>(Collections.singletonList(10000000001L)), entry.touchedPages);
+        System.out.println(dirtyPageTable);
+        //TODO: For some reason DPT not storing the page 10000000001L.
         assertEquals(LSN, (long) dirtyPageTable.get(10000000001L));
 
         func.run(); // undo
@@ -870,7 +872,6 @@ public class TestRecoveryManager {
         assertEquals(new EndTransactionLogRecord(1L, LSN3), iter.next());
 
         assertFalse(iter.hasNext());
-
         assertEquals(new HashMap<Long, Long>() {
             {
                 put(10000000001L, LSN3);

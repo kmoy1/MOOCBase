@@ -3,12 +3,11 @@ package edu.berkeley.cs186.database.table;
 import java.util.*;
 
 import edu.berkeley.cs186.database.DatabaseException;
+import edu.berkeley.cs186.database.TransactionContext;
 import edu.berkeley.cs186.database.common.iterator.*;
 import edu.berkeley.cs186.database.common.Bits;
 import edu.berkeley.cs186.database.common.Buffer;
-import edu.berkeley.cs186.database.concurrency.LockContext;
-import edu.berkeley.cs186.database.concurrency.LockType;
-import edu.berkeley.cs186.database.concurrency.LockUtil;
+import edu.berkeley.cs186.database.concurrency.*;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.io.PageException;
 import edu.berkeley.cs186.database.memory.Page;
@@ -111,6 +110,8 @@ public class Table implements BacktrackingIterable<Record> {
     // The lock context of the table.
     private LockContext lockContext;
 
+    private boolean autoEscalateable;
+
     // Constructors //////////////////////////////////////////////////////////////
     /**
      * Load a table named `name` with schema `schema` from `heapFile`. `lockContext`
@@ -118,9 +119,10 @@ public class Table implements BacktrackingIterable<Record> {
      * new table will be created if none exists on the heapfile.
      */
     public Table(String name, Schema schema, HeapFile heapFile, LockContext lockContext) {
-        // TODO(proj4_part3): table locking code
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.X);
 
         this.name = name;
+        this.lockContext = lockContext;
         this.heapFile = heapFile;
         this.schema = schema;
         this.bitmapSizeInBytes = computeBitmapSizeInBytes(heapFile.getEffectivePageSize(), schema);
@@ -131,6 +133,7 @@ public class Table implements BacktrackingIterable<Record> {
 
         this.stats = new TableStats(this.schema, this.numRecordsPerPage);
         this.numRecords = 0;
+        this.autoEscalateable = true;
 
         Iterator<Page> iter = this.heapFile.iterator();
         while(iter.hasNext()) {
@@ -146,8 +149,6 @@ public class Table implements BacktrackingIterable<Record> {
             }
             page.unpin();
         }
-
-        this.lockContext = lockContext;
     }
 
     // Accessors /////////////////////////////////////////////////////////////////
@@ -289,6 +290,11 @@ public class Table implements BacktrackingIterable<Record> {
      */
     public synchronized Record getRecord(RecordId rid) {
         validateRecordId(rid);
+        if (autoEscalateable) {
+            LockUtil.autoEscalate(TransactionContext.getTransaction(), lockContext);
+        }
+        LockUtil.ensureSufficientLockHeld(lockContext.childContext(rid.getPageNum()),
+                LockType.S);
         Page page = fetchPage(rid.getPageNum());
         try {
             byte[] bitmap = getBitMap(page);
@@ -312,9 +318,13 @@ public class Table implements BacktrackingIterable<Record> {
      * not correspond to an existing record in the table.
      */
     public synchronized Record updateRecord(List<DataBox> values, RecordId rid) {
-        // TODO(proj4_part3): modify for smarter locking
-
         validateRecordId(rid);
+        if (autoEscalateable) {
+            LockUtil.autoEscalate(TransactionContext.getTransaction(), lockContext);
+        }
+        LockUtil.ensureSufficientLockHeld(lockContext.childContext(rid.getPageNum()),
+                LockType.X);
+
 
         Record newRecord = schema.verify(values);
         Record oldRecord = getRecord(rid);
@@ -322,7 +332,6 @@ public class Table implements BacktrackingIterable<Record> {
         Page page = fetchPage(rid.getPageNum());
         try {
             insertRecord(page, rid.getEntryNum(), newRecord);
-
             this.stats.removeRecord(oldRecord);
             this.stats.addRecord(newRecord);
             return oldRecord;
@@ -337,10 +346,12 @@ public class Table implements BacktrackingIterable<Record> {
      * if rid does not correspond to an existing record in the table.
      */
     public synchronized Record deleteRecord(RecordId rid) {
-        // TODO(proj4_part3): modify for smarter locking
-
         validateRecordId(rid);
-
+        if (autoEscalateable) {
+            LockUtil.autoEscalate(TransactionContext.getTransaction(), lockContext);
+        }
+        LockUtil.ensureSufficientLockHeld(lockContext.childContext(rid.getPageNum()),
+                LockType.X);
         Page page = fetchPage(rid.getPageNum());
         try {
             Record record = getRecord(rid);
@@ -437,7 +448,7 @@ public class Table implements BacktrackingIterable<Record> {
      * has at least 10 pages should escalate to a table-level lock before any locks are requested.
      */
     public void enableAutoEscalate() {
-        // TODO(proj4_part3): implement
+        autoEscalateable = true;
     }
 
     /**
@@ -445,13 +456,12 @@ public class Table implements BacktrackingIterable<Record> {
      * an automatic escalation to a table-level lock.
      */
     public void disableAutoEscalate() {
-        // TODO(proj4_part3): implement
+        autoEscalateable = false;
     }
 
     // Iterators /////////////////////////////////////////////////////////////////
     public BacktrackingIterator<RecordId> ridIterator() {
-        // TODO(proj4_part3): reduce locking overhead for table scans
-
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         BacktrackingIterator<Page> iter = heapFile.iterator();
         return new ConcatBacktrackingIterator<>(new PageIterator(iter, false));
     }

@@ -630,7 +630,7 @@ public class Database implements AutoCloseable {
         // will be blocked while we're inside a compute call.
         boolean mayNeedToCreate = !tableInfoLookup.containsKey(tableName);
         if (mayNeedToCreate) {
-            // TODO(proj4_part3): acquire all locks needed on database/information_schema.tables before compute()
+            LockUtil.lockDBAndTables(getTableInfoContext());
             tableInfoLookup.compute(tableName, (tableName_, recordId) -> {
                 if (recordId != null) { // record created between containsKey call and this
                     return recordId;
@@ -639,8 +639,11 @@ public class Database implements AutoCloseable {
                 return Database.this.tableInfo.addRecord(new TableInfoRecord(tableName_).toDataBox());
             });
         }
-
-        // TODO(proj4_part3): acquire all locks needed on the row in information_schema.tables
+        //Lock header page.
+        RecordId record = tableInfoLookup.get(tableName);
+        LockContext tableResource = getTableInfoContext();
+        LockContext pageResource = tableResource.childContext(record.getPageNum());
+        LockUtil.ensureSufficientLockHeld(pageResource, lockType);
     }
 
     private TableInfoRecord getTableMetadata(String tableName) {
@@ -659,6 +662,7 @@ public class Database implements AutoCloseable {
         boolean mayNeedToCreate = !indexInfoLookup.containsKey(indexName);
         if (mayNeedToCreate) {
             // TODO(proj4_part3): acquire all locks needed on database/information_schema.indices before compute()
+            LockUtil.lockDBAndIndices(getIndexInfoContext());
             indexInfoLookup.compute(indexName, (indexName_, recordId) -> {
                 if (recordId != null) { // record created between containsKey call and this
                     return recordId;
@@ -676,8 +680,9 @@ public class Database implements AutoCloseable {
                         ));
             });
         }
-
-        // TODO(proj4_part3): acquire all locks needed on the row in information_schema.indices
+        RecordId record = indexInfoLookup.get(indexName);
+        LockContext pageResource = getIndexInfoContext().childContext(record.getPageNum());
+        LockUtil.ensureSufficientLockHeld(pageResource, lockType);
     }
 
     private BPlusTreeMetadata getIndexMetadata(String tableName, String columnName) {
@@ -848,9 +853,9 @@ public class Database implements AutoCloseable {
 
         @Override
         public Iterator<Record> sortedScan(String tableName, String columnName) {
-            // TODO(proj4_part3): scan locking
-
             Table tab = getTable(tableName);
+            LockContext tableResource = getTableContext(tableName);
+            LockUtil.ensureSufficientLockHeld(tableResource, LockType.S);
             try {
                 Pair<String, BPlusTree> index = resolveIndexFromName(tableName, columnName);
                 return new RecordIterator(tab, index.getSecond().scanAll());
@@ -867,9 +872,9 @@ public class Database implements AutoCloseable {
 
         @Override
         public Iterator<Record> sortedScanFrom(String tableName, String columnName, DataBox startValue) {
-            // TODO(proj4_part3): scan locking
-
             Table tab = getTable(tableName);
+            LockContext tableLockContext = getTableContext(tableName);
+            LockUtil.ensureSufficientLockHeld(tableLockContext, LockType.S);
             Pair<String, BPlusTree> index = resolveIndexFromName(tableName, columnName);
             return new RecordIterator(tab, index.getSecond().scanGreaterEqual(startValue));
         }
@@ -1054,14 +1059,16 @@ public class Database implements AutoCloseable {
 
         @Override
         public void close() {
-<<<<<<< HEAD
             deleteAllTempTables();
             //Acquire locks to be released.
-            List<Lock> releaseLocks = lockManager.getLocks(this);
-=======
-            // TODO(proj4_part3): release locks held by the transaction
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
-            return;
+            List<Lock> locks = lockManager.getLocks(this);
+            //We need to release locks from the BOTTOM-UP, so we reverse this list
+            Collections.reverse(locks);
+            for (Lock lock: locks) {
+                LockContext resource = LockContext.fromResourceName(lockManager, lock.name);
+                //We only want to release locks if there are no locks on CHILD nodes (bottom up)
+                if (resource.saturation(this) == 0) resource.release(this);
+            }
         }
 
         @Override
@@ -1088,6 +1095,7 @@ public class Database implements AutoCloseable {
             String indexName = tableName + "," + columnName;
 
             // TODO(proj4_part3): add locking
+            lockIndexMetadata(indexName, LockType.S);
 
             BPlusTreeMetadata metadata = getIndexMetadata(tableName, columnName);
             if (metadata == null) {
@@ -1117,6 +1125,7 @@ public class Database implements AutoCloseable {
             }
 
             // TODO(proj4_part3): add locking
+            lockTableMetadata(tableName, LockType.S);
 
             TableInfoRecord record = getTableMetadata(tableName);
             if (!record.isAllocated()) {
@@ -1197,8 +1206,7 @@ public class Database implements AutoCloseable {
             TransactionContext.setTransaction(transactionContext);
             try {
                 // TODO(proj4_part3): add locking
-
-                lockTableMetadata(prefixedTableName, LockType.NL);
+                lockTableMetadata(prefixedTableName, LockType.X);
 
                 TableInfoRecord record = getTableMetadata(prefixedTableName);
                 if (record.isAllocated()) {
@@ -1231,7 +1239,8 @@ public class Database implements AutoCloseable {
             String prefixedTableName = prefixUserTableName(tableName);
             TransactionContext.setTransaction(transactionContext);
             try {
-                // TODO(proj4_part3): add locking
+                lockTableMetadata(prefixedTableName, LockType.X);
+                LockUtil.ensureSufficientLockHeld(getTableContext(tableName), LockType.X);
 
                 lockTableMetadata(prefixedTableName, LockType.NL);
 
@@ -1261,6 +1270,8 @@ public class Database implements AutoCloseable {
             TransactionContext.setTransaction(transactionContext);
             try {
                 // TODO(proj4_part3): add locking
+                LockContext dbResource = lockManager.databaseContext();
+                LockUtil.ensureSufficientLockHeld(dbResource, LockType.X);
 
                 List<String> tableNames = new ArrayList<>(tableLookup.keySet());
 
@@ -1283,8 +1294,7 @@ public class Database implements AutoCloseable {
             TransactionContext.setTransaction(transactionContext);
             try {
                 // TODO(proj4_part3): add locking
-
-                lockTableMetadata(prefixedTableName, LockType.NL);
+                lockTableMetadata(prefixedTableName, LockType.S);
 
                 TableInfoRecord tableMetadata = getTableMetadata(prefixedTableName);
                 if (!tableMetadata.isAllocated()) {
@@ -1301,8 +1311,9 @@ public class Database implements AutoCloseable {
                 int columnIndex = schemaColNames.indexOf(columnName);
                 Type colType = schemaColType.get(columnIndex);
                 String indexName = tableName + "," + columnName;
-
-                lockIndexMetadata(indexName, LockType.NL);
+                //Promote to X after wards.
+                lockIndexMetadata(indexName, LockType.X);
+                lockTableMetadata(tableName, LockType.X);
 
                 BPlusTreeMetadata metadata = getIndexMetadata(tableName, columnName);
                 if (metadata != null) {
@@ -1350,9 +1361,8 @@ public class Database implements AutoCloseable {
             String indexName = tableName + "," + columnName;
             TransactionContext.setTransaction(transactionContext);
             try {
-                // TODO(proj4_part3): add locking
-
-                lockIndexMetadata(indexName, LockType.NL);
+                lockIndexMetadata(indexName, LockType.X);
+                LockUtil.ensureSufficientLockHeld(getIndexContext(indexName), LockType.X);
 
                 BPlusTreeMetadata metadata = getIndexMetadata(tableName, columnName);
                 if (metadata == null) {

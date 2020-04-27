@@ -1,8 +1,6 @@
 package edu.berkeley.cs186.database.concurrency;
-<<<<<<< HEAD
-=======
-// If you see this line, you have successfully pulled the latest changes from the skeleton for proj4!
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
+
+import edu.berkeley.cs186.database.Transaction;
 import edu.berkeley.cs186.database.TransactionContext;
 
 import java.util.*;
@@ -14,7 +12,7 @@ import java.util.*;
  */
 public class LockUtil {
     /**
-     * Ensure that the current transaction can perform actions requiring LOCKTYPE on LOCKCONTEXT (resource).
+     * Ensure that the current transaction can perform actions requiring LOCKTYPE on LOCKCONTEXT.
      *
      * This method should promote/escalate as needed, but should only grant the least
      * permissive set of locks needed.
@@ -24,23 +22,29 @@ public class LockUtil {
      * If the current transaction is null (i.e. there is no current transaction), this method should do nothing.
      */
     public static void ensureSufficientLockHeld(LockContext lockContext, LockType lockType) {
-        //First, acquire current transaction.
-        TransactionContext transaction = TransactionContext.getTransaction();
+        TransactionContext transaction = TransactionContext.getTransaction(); // current transaction
         if (transaction == null) return;
-        //Next, acquire lock on lock context (if any). Check duplicate.
+        LockContext parent = lockContext.parentContext();
         LockType currentLT = lockContext.getExplicitLockType(transaction);
-        LockType impliedLT = lockContext.getEffectiveLockType(transaction); //We'll need this in the case of calling this on child nodes.
+        LockType impliedLT = lockContext.getEffectiveLockType(transaction); //Parent Lock Context
         if (currentLT == lockType) return;
-        //Now, based on the REQUIRED LockType, check CURRENT resource lock type (held by transaction).
-        switch(lockType) {
+        //If parent-most node of lock context HAS NO lock (NOT NL LockType),
+        // then we are free to place whatever lock necessary on current LC.
+        if (parent == null) {
+            if (currentLT == LockType.NL) lockContext.acquire(transaction, lockType);
+            else{
+                updateCurrentLock(transaction, lockContext, lockType);
+            }
+        }
+        switch(lockType){
             case NL: break;
             case S:
                 if (isSIXSX(impliedLT)) break; //Current node has correct implicit lock
-                handleS(lockContext);
+                TopDownParentLockUpdate(transaction, lockContext, lockType);
                 break;
             case X:
                 if(impliedLT == LockType.X) break; //Current node has correct implicit lock
-                handleX(lockContext);
+                TopDownParentLockUpdate(transaction, lockContext, lockType);
                 break;
             default:
                 throw new UnsupportedOperationException();//Should never reach here.
@@ -53,8 +57,100 @@ public class LockUtil {
         return lt == LockType.SIX || lt == LockType.S || lt == LockType.X;
     }
 
-    /** Applies lock LOCKTYPE to all LockContexts specified in deque RESOURCES.
-    Assume RESOURCES do not have conflicting locks. **/
+    /**ONLY call this when operating on page-level resources that a transaction holds a lock on.
+     * Perform auto escalation when two conditions are met:
+     The transaction holds at least 20% of the table's pages (saturation > 20%)
+     The table has at least 10 pages (to avoid locking the entire table unnecessarily when the table is very small).
+     **/
+    public static void autoEscalate(TransactionContext transaction, LockContext lc) {
+        if (lc.isTable() && lc.saturation(transaction) >= 0.2
+                && lc.capacity() >= 10) {
+            lc.escalate(transaction);
+        }
+    }
+    /**Helper method that update's a resource's (lc) lock directly,
+     * depending on circumstances with the current lock it has. **/
+    private static void updateCurrentLock(TransactionContext transaction, LockContext lc, LockType lockType) {
+//        if (lc.readonly) return; //Seems fishy; may need to remove. Update: PASS TESTS REMOVING! :)
+//        autoEscalate(transaction,lc);
+        LockType currentLT = lc.getExplicitLockType(transaction);
+        //CASE 1: If current resource has no lock, then simply acquire it.
+        if (currentLT == LockType.NL) {
+            lc.acquire(transaction, lockType);
+        }
+        //CASE 2: We currently hold an S lock and we want an X lock. Need to PROMOTE it.
+        else if (currentLT == LockType.S && lockType == LockType.X) {
+            lc.promote(transaction, lockType);
+        }
+        //CASE 3: We hold an IX and want an S. To handle subtree X locks, we must promote to SIX.
+        // Necessary child lock releases are handled in promote.
+        else if (lockType == LockType.S && currentLT == LockType.IX ) {
+            lc.promote(transaction, LockType.SIX);
+        }
+        //CASE 4: We hold an IS/IX lock and want an S/X lock. We need to ESCALATE.
+        else if ((currentLT == LockType.IX && lockType == LockType.X)||
+                (currentLT == LockType.IS && lockType == LockType.S)) {
+            lc.escalate(transaction);
+        }
+        else return; //Should never reach here.
+    }
+
+    /** Helper function that returns root of resource hierarchy.**/
+    private static LockContext root(LockContext lc) {
+        LockContext temp = lc;
+        // traverse to top of hierarchy
+        while (temp.parentContext() != null) {
+            temp = temp.parentContext();
+        }
+        return temp;
+    }
+
+    /** Helper function that returns a list of parent resources from given lock context**/
+    private static List<LockContext> parentResources(LockContext lc) {
+        List<LockContext> parents = new ArrayList<>();
+        LockContext resource = lc;
+        // traverse to top of hierarchy
+        while (resource.parentContext() != null) {
+            resource = resource.parentContext();
+            parents.add(resource);
+        }
+        parents.add(resource);
+        return parents;
+    }
+    /** Helper method for updating PARENT locks as necessary, FROM ROOT TO CLOSEST PARENT (TOP DOWN)s.
+     * In lieu of part 3,
+     * I decided that using a Deque was overly cute and simply reversed the list of parents.**/
+    private static void TopDownParentLockUpdate(TransactionContext transaction, LockContext lc, LockType lockType) {
+        List<LockContext> parentResources = parentResources(lc);
+        // Pointer to parent.
+        LockContext parent;
+
+        for (int i = parentResources.size()-1; i >= 0; i--) {
+            parent = parentResources.get(i);
+//            autoEscalate(transaction,lc);
+            LockType parentLT = parent.getExplicitLockType(transaction);
+            switch (lockType) {
+                case X:
+                    switch (parentLT) {
+                        case X: return;
+                        //Parents of X locks can only be IX/SIX/X
+                        case NL: parent.acquire(transaction, LockType.IX); break;
+                        case S: parent.promote(transaction, LockType.SIX); break;
+                        case IS: parent.promote(transaction, LockType.IX); break;
+                    }
+                    break;
+                case S:
+                    //Parents of S locks may ONLY be S/IS.
+                    if (parentLT == LockType.S) return;
+                    //Same as applyLocks(noLockParents, LockType.IS)
+                    if (parentLT == LockType.NL) parent.acquire(transaction, LockType.IS);
+                    break;
+            }
+        }
+        updateCurrentLock(transaction, lc, lockType);
+        return;
+    }
+
     public static void applyLocks(ArrayDeque<LockContext> resources, LockType locktype) {
         TransactionContext transaction = TransactionContext.getTransaction();
         for (LockContext resource : resources) {
@@ -65,7 +161,7 @@ public class LockUtil {
     /** Promotes all locks to LOCKTYPE in all LockContexts specified in deque RESOURCES.
      Assume RESOURCES do not have conflicting locks. **/
     public static void promoteLocks(ArrayDeque<LockContext> resources,
-                                  TransactionContext transaction, LockType locktype) {
+                                    TransactionContext transaction, LockType locktype) {
         for (LockContext resource : resources) {
             resource.promote(transaction, locktype);
         }
@@ -84,98 +180,42 @@ public class LockUtil {
         }
         return noLockParents;
     }
-    /** Promotion + Escalation in the case of needing a shared lock on resource. **/
-    private static void handleS(LockContext lc) {
+    /**Solely used by lockIndexMeta: **/
+    public static void lockDBAndIndices(LockContext lc) {
+        TransactionContext transaction = TransactionContext.getTransaction(); // current transaction
+        if (lc.readonly) return;
+        lockParents(LockType.IX, lc.parentContext());
+    }
+    /**Solely used by lockTableMeta**/
+    public static void lockDBAndTables(LockContext lc) {
         TransactionContext transaction = TransactionContext.getTransaction();
-        //First, we must change the parent lock -> IS such that lock can be placed on current resource.
-        LockContext parentNode = lc.parentContext();
-        //No parent exists for lock context.
-        if (parentNode != null) {
-            ArrayDeque<LockContext> noLockParents = getNoLockParents(lc);
-            //Place IS locks on all parents.
-            applyLocks(noLockParents, LockType.IS);
-        }
-
-        //There is also a special case: if we got an IX lock going on either in current node/children,
-        // a SIX lock must be acquired on current resource,
-        //AND all subtree nodes with locks != X MUST be released.
-        boolean IXLockOnChild = lc.specificLockOnChild(transaction, LockType.IX);
+        if (lc.readonly) return; //Fishy, might wanna remove this later.
+        lockParents(LockType.IX, lc.parentContext());
+    }
+    /**Lock parents (index/table and database) TOP-DOWN. Assume LC is not null initially.**/
+    private static void lockParents(LockType lockType, LockContext lc) {
+        if (lc == null) return;
+        TransactionContext transaction = TransactionContext.getTransaction();
+        LockContext parent = lc.parentContext();
         LockType currentLT = lc.getExplicitLockType(transaction);
-        if (IXLockOnChild || currentLT == LockType.IX) {
-            List<ResourceName> SISCHILDREN = lc.sisDescendants(transaction);
-            SISCHILDREN.add(lc.name);
-            //Acquire SIX lock on current resource and release all children with S/IS locks.
-            lc.lockman.acquireAndRelease(transaction, lc.name, LockType.SIX, SISCHILDREN);
-        }
-        //Case 2: If current resource has no lock, then simply grant it the S lock.
-        else if (currentLT == LockType.NL) {
-            lc.acquire(transaction, LockType.S);
-        }
-        else {
-            lc.escalate(transaction);
-        }
-        return;
-    }
-
-    /** Promotion + Escalation in the case of needing a lock on resource. **/
-    private static void handleX(LockContext lc) {
-        TransactionContext transaction = TransactionContext.getTransaction();
-        LockContext parentNode = lc.parentContext();
-        if (parentNode == null) return;
-        boolean ISLockOnParent = lc.specificLockOnParent(transaction, LockType.IS);
-        boolean SLockOnParent = lc.specificLockOnParent(transaction, LockType.S);
-        if (ISLockOnParent || SLockOnParent) {
-            //Promote parent nodes with IS/S locks to IX/X locks (respectively)
-            promoteParents(lc);
-        }
-        else {
-            ArrayDeque<LockContext> NoLockParents = getNoLockParents(lc);
-            applyLocks(NoLockParents, LockType.IX);
-        }
-        LockType currentLT = lc.getEffectiveLockType(transaction);
-        if (currentLT == LockType.X) return;
-        BubbleUpXLock(lc);
-        return;
-    }
-
-    /** Promote parents of lockcontexts' locks held by transaction: S-> X, IS->IX **/
-    private static void promoteParents(LockContext lc) {
-        TransactionContext transaction = TransactionContext.getTransaction();
-        LockContext parentNode = lc.parentContext();
-        ArrayDeque<LockContext> ISLockParents = new ArrayDeque<>();
-        ArrayDeque<LockContext> SLockParents = new ArrayDeque<>();
-        LockType parentLT;
-        //Traverse up parents and add all WITH S or IS locks. Rank by parent level.
-        while (parentNode != null) {
-            parentLT = parentNode.getExplicitLockType(transaction);
-            if (parentLT == LockType.IS) {
-                ISLockParents.addFirst(parentNode);
+        if (lockType == LockType.IX || lockType == LockType.SIX) {
+            if (parent != null) lockParents(LockType.IX, parent);
+            //Reached the root.
+            //Parent doesnt have a lock, make it IX.
+            if (currentLT == LockType.NL) {
+                lc.acquire(transaction, LockType.IX);
             }
-            else if (parentLT == LockType.S) {
-                SLockParents.addFirst(parentNode);
+            //Parent has S lock -> SIX lock (all IX locks acquired before are released)
+            else if (currentLT == LockType.S) {
+                lc.promote(transaction, LockType.SIX);
             }
-            parentNode = parentNode.parentContext();
-        }
-        //Promote all parent Locks with IS -> IX, and all parent locks with S -> X.
-        promoteLocks(ISLockParents, transaction, LockType.IX);
-        promoteLocks(SLockParents, transaction, LockType.X);
-        return;
-    }
-
-    /** Helper method that either sets current resource lock to X or bubbles X lock up from descendants.
-     * We need this because an X lock action NEEDS to have the parent node be as permissive as possible: i.e. X locked.  **/
-    private static void BubbleUpXLock(LockContext lc) {
-        TransactionContext transaction = TransactionContext.getTransaction();
-        LockType currentLT = lc.getExplicitLockType(transaction);
-        if (currentLT == LockType.NL) {
-            lc.acquire(transaction, LockType.X);
-        }
-        else {
-            lc.escalate(transaction);
-            if (lc.getExplicitLockType(transaction) != LockType.X) { //Must call explicitlocktype again, since our current lock might have changed.
-                lc.promote(transaction, LockType.X);
+            //Otherwise, promote to IX
+            else {
+                boolean SorISorNL = LockType.substitutable(currentLT, LockType.IX);
+                if (!SorISorNL) { //S or IS or NL
+                    lc.promote(transaction, LockType.IX);
+                }
             }
         }
-        return;
     }
 }

@@ -3,6 +3,8 @@ package edu.berkeley.cs186.database.index;
 import edu.berkeley.cs186.database.TransactionContext;
 import edu.berkeley.cs186.database.common.Pair;
 import edu.berkeley.cs186.database.concurrency.LockContext;
+import edu.berkeley.cs186.database.concurrency.LockType;
+import edu.berkeley.cs186.database.concurrency.LockUtil;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.databox.Type;
 import edu.berkeley.cs186.database.io.DiskSpaceManager;
@@ -85,8 +87,6 @@ public class BPlusTree {
      * All pages allocated on the given partition are serializations of inner and leaf nodes.
      */
     public BPlusTree(BufferManager bufferManager, BPlusTreeMetadata metadata, LockContext lockContext) {
-        // TODO(proj4_part3): B+ tree locking
-
         // Sanity checks.
         if (metadata.getOrder() < 0) {
             String msg = String.format(
@@ -107,6 +107,10 @@ public class BPlusTree {
         this.bufferManager = bufferManager;
         this.lockContext = lockContext;
         this.metadata = metadata;
+
+        //Lock entire tree/
+        lockContext.disableChildLocks();
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.X);
 
         if (this.metadata.getRootPageNum() != DiskSpaceManager.INVALID_PAGE_NUM) {
             this.updateRoot(BPlusNode.fromBytes(this.metadata, bufferManager, lockContext,
@@ -135,16 +139,9 @@ public class BPlusTree {
      */
     public Optional<RecordId> get(DataBox key) {
         typecheck(key);
-<<<<<<< HEAD
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         LeafNode leaf = root.get(key); //Get the leaf node with key (starting from root).
         return leaf.getKey(key); //get recordId
-        // TODO(proj4_part2): B+ tree locking
-=======
-        // TODO(proj2): implement
-        // TODO(proj4_part3): B+ tree locking
-
-        return Optional.empty();
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
     }
 
     /**
@@ -156,8 +153,7 @@ public class BPlusTree {
      */
     public Iterator<RecordId> scanEqual(DataBox key) {
         typecheck(key);
-        // TODO(proj4_part3): B+ tree locking
-
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         Optional<RecordId> rid = get(key);
         if (rid.isPresent()) {
             ArrayList<RecordId> l = new ArrayList<>();
@@ -194,15 +190,8 @@ public class BPlusTree {
      * memory will receive 0 points.
      */
     public Iterator<RecordId> scanAll() {
-<<<<<<< HEAD
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         return new BPlusTreeIterator();
-        // TODO(proj4_part2): B+ tree locking
-=======
-        // TODO(proj2): Return a BPlusTreeIterator.
-        // TODO(proj4_part3): B+ tree locking
-
-        return Collections.emptyIterator();
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
     }
 
     /**
@@ -230,15 +219,8 @@ public class BPlusTree {
      */
     public Iterator<RecordId> scanGreaterEqual(DataBox key) {
         typecheck(key);
-<<<<<<< HEAD
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         return new BPlusTreeIterator(key);
-        // TODO(proj4_part2): B+ tree locking
-=======
-        // TODO(proj2): Return a BPlusTreeIterator.
-        // TODO(proj4_part3): B+ tree locking
-
-        return Collections.emptyIterator();
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
     }
 
     /**
@@ -252,7 +234,7 @@ public class BPlusTree {
      */
     public void put(DataBox key, RecordId rid) throws BPlusTreeException {
         typecheck(key);
-<<<<<<< HEAD
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.X);
         Optional<Pair<DataBox, Long>> test = root.put(key, rid);
         if (!test.isPresent()) return;
         else {//Root node split. Need a new root.
@@ -261,7 +243,6 @@ public class BPlusTree {
             BPlusNode newRt = new InnerNode(metadata,bufferManager,rk,rk2,lockContext);
             this.updateRoot(newRt);
         }
-        // TODO(proj4_part2): B+ tree locking
     }
     /** Helper function that, given a (split key, right page) pair,
      * returns a list of pointers to the root's child nodes.**/
@@ -273,10 +254,6 @@ public class BPlusTree {
         kids.add(rightkid);
         return kids;
     }
-=======
-        // TODO(proj2): implement
-        // TODO(proj4_part3): B+ tree locking
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
 
     /** Helper function that, given a (split key, right page) pair,
      * returns a list (of a single key) of the root.**/
@@ -305,7 +282,7 @@ public class BPlusTree {
      * bulkLoad (see comments in BPlusNode.bulkLoad).
      */
     public void bulkLoad(Iterator<Pair<DataBox, RecordId>> data, float fillFactor) {
-<<<<<<< HEAD
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.X);
         Iterator<RecordId> iter = scanAll();
         if (iter.hasNext()) { //Check if tree is empty.
             throw new BPlusTreeException("Tree Not Empty");
@@ -320,12 +297,6 @@ public class BPlusTree {
                 this.updateRoot(newRt);
             }
         }
-        // TODO(proj4_part2): B+ tree locking
-=======
-        // TODO(proj2): implement
-        // TODO(proj4_part3): B+ tree locking
-
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
         return;
     }
 
@@ -342,14 +313,8 @@ public class BPlusTree {
      */
     public void remove(DataBox key) {
         typecheck(key);
-<<<<<<< HEAD
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.X);
         root.remove(key);
-        // TODO(proj4_part2): B+ tree locking
-=======
-        // TODO(proj2): implement
-        // TODO(proj4_part3): B+ tree locking
-
->>>>>>> d3f1c58acb536e37b4814137e297ed49de67e027
         return;
     }
 
@@ -359,7 +324,7 @@ public class BPlusTree {
      * more information.
      */
     public String toSexp() {
-        // TODO(proj4_part3): B+ tree locking
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         return root.toSexp();
     }
 
@@ -376,7 +341,7 @@ public class BPlusTree {
      * to create a PDF of the tree.
      */
     public String toDot() {
-        // TODO(proj4_part3): B+ tree locking
+        LockUtil.ensureSufficientLockHeld(lockContext, LockType.S);
         List<String> strings = new ArrayList<>();
         strings.add("digraph g {" );
         strings.add("  node [shape=record, height=0.1];");

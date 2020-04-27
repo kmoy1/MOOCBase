@@ -85,12 +85,13 @@ public class PageDirectory implements HeapFile {
      */
     public PageDirectory(BufferManager bufferManager, int partNum, long pageNum,
                          short emptyPageMetadataSize, LockContext lockContext) {
-        // TODO(proj4_part3): update table capacity
         this.bufferManager = bufferManager;
         this.partNum = partNum;
         this.emptyPageMetadataSize = emptyPageMetadataSize;
         this.lockContext = lockContext;
         this.firstHeader = new HeaderPage(pageNum, 0, true);
+        //Update table capacity BASED ON THE ESTIMATE of DPs.
+        lockContext.capacity(getNumDataPages());
     }
 
     @Override
@@ -110,8 +111,6 @@ public class PageDirectory implements HeapFile {
 
     @Override
     public Page getPageWithSpace(short requiredSpace) {
-        // TODO(proj4_part3): modify for smarter locking
-
         if (requiredSpace <= 0) {
             throw new IllegalArgumentException("cannot request nonpositive amount of space");
         }
@@ -120,7 +119,10 @@ public class PageDirectory implements HeapFile {
         }
 
         Page page = this.firstHeader.loadPageWithSpace(requiredSpace);
-
+        long pgNum = page.getPageNum();
+        LockContext child = lockContext.childContext(pgNum);
+        //Request X lock to begin with.
+        LockUtil.ensureSufficientLockHeld(child, LockType.X);
         return new DataPage(pageDirectoryId, page);
     }
 
@@ -319,7 +321,8 @@ public class PageDirectory implements HeapFile {
 
         // gets and loads a page with the required free space
         private Page loadPageWithSpace(short requiredSpace) {
-            // TODO(proj4_part3): update table capacity
+            //One liner to update capacity for resource
+            lockContext.capacity(getNumDataPages()+1);
 
             this.page.pin();
             try {
@@ -347,6 +350,8 @@ public class PageDirectory implements HeapFile {
 
                 // if we have any unused slot in this header page, allocate a new data page
                 if (unusedSlot != -1) {
+                    //One liner to update capacity for resource
+                    lockContext.capacity(lockContext.capacity()+1);
                     Page page = bufferManager.fetchNewPage(lockContext, partNum, false);
                     DataPageEntry dpe = new DataPageEntry(page.getPageNum(),
                                                           (short) (EFFECTIVE_PAGE_SIZE - emptyPageMetadataSize - requiredSpace));

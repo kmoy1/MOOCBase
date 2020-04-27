@@ -10,6 +10,7 @@ class CommitTransactionLogRecord extends LogRecord {
     private long transNum;
     private long prevLSN;
 
+    /** Create new COMMIT log record **/
     CommitTransactionLogRecord(long transNum, long prevLSN) {
         super(LogType.COMMIT_TRANSACTION);
         this.transNum = transNum;
