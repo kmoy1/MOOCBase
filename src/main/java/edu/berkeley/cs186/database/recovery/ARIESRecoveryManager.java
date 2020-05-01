@@ -514,7 +514,8 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 if (pageRelated(CLRRecord)) {
                     long pageID = CLRRecord.getPageNum().get();
                     // If CLR record is an UPDATE to undo
-                    if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE) {
+                    if (CLRRecord.type == LogType.UNDO_UPDATE_PAGE ||
+                            CLRRecord.type == LogType.UPDATE_PAGE) {
                         dirtyPageTable.putIfAbsent(pageID, lastLSN);
                     }
                     //IF CLR record undid an update that first dirtied page, remove that page from DPT.
@@ -799,6 +800,12 @@ public class ARIESRecoveryManager implements RecoveryManager {
             if (currentRecord.type == LogType.BEGIN_CHECKPOINT) {
                 updateTransactionCounter.accept(currentRecord.getMaxTransactionNum().get());
             }
+            /* If the log record is an end_checkpoint record:
+             * - Copy all entries of checkpoint DPT (replace existing entries if any)
+             * - Update lastLSN to be the larger of the existing entry's (if any) and the checkpoint's;
+             *   add to transaction table if not already present.
+             * - Add page numbers from checkpoint's touchedPages to the touchedPages sets in the
+             *   transaction table if the transaction has not finished yet, and acquire X locks. */
             else if (currentRecord.type.equals(LogType.END_CHECKPOINT)) {
                 //Copy all entries of checkpoint DPT to actual DPT.
                 for (Map.Entry<Long, Long> checkptDPTEntry : currentRecord.getDirtyPageTable().entrySet()) {
@@ -807,10 +814,15 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 //For each Xact in endcheckpt Xact table, Update lastLSNs in actual Xact table to max(actual LSN, checkptLSN)
                 Set<Map.Entry<Long, Pair<Transaction.Status, Long>>> checkptXactTable = currentRecord.getTransactionTable().entrySet();
                 for (Map.Entry<Long, Pair<Transaction.Status, Long>> checkptXactEntry : checkptXactTable) {
+                    Transaction.Status XactStatus = checkptXactEntry.getValue().getFirst();
                     long EC_lastLSN = checkptXactEntry.getValue().getSecond();//end checkpoint lastLSN for this Xact.
                     long EC_XID = checkptXactEntry.getKey();
                     //get corresponding Xact row (possibly null) in actual Xact table
                     TransactionTableEntry XactTableEntry = transactionTable.get(EC_XID);
+                    if (XactStatus.equals(Status.ABORTING)) {
+                        transactionTable.get(EC_XID).transaction.setStatus(Status.RECOVERY_ABORTING);
+                        continue;
+                    }
                     if (transactionTable.containsKey(EC_XID)) {
                         if (XactTableEntry.lastLSN < EC_lastLSN) {
                             XactTableEntry.lastLSN = EC_lastLSN;
@@ -822,6 +834,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
                         TransactionTableEntry newRow = transactionTable.get(EC_XID);
                         newRow.lastLSN = currentRecord.getLSN();
                     }
+
                 }
                 //Add checkpoint's touchedPages to our actual Xact table's touched pages, and acquire XLOX
                 Set<Map.Entry<Long, List<Long>>> checkptTouchedPagesTable = currentRecord.getTransactionTouchedPages().entrySet();
